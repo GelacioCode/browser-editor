@@ -1,0 +1,48 @@
+/*
+ * Design tokens. The whole UI reads colours, radii and spacing from these variables only,
+ * so the post-MVP redesign can be done by changing this file (and the component markup),
+ * without hunting for hard-coded values.
+ */
+:root {
+  /* Surfaces */
+  --vd-bg: #0e0f13;
+  --vd-surface-1: #15171d;
+  --vd-surface-2: #1c1f27;
+  --vd-surface-3: #252935;
+  --vd-surface-hover: #2b303d;
+  --vd-border: #2a2e3a;
+  --vd-border-strong: #3a4050;
+
+  /* Text */
+  --vd-text: #e8eaf0;
+  --vd-text-muted: #9aa1b2;
+  --vd-text-faint: #646b7d;
+
+  /* Brand / accents */
+  --vd-accent: #6d5efc;
+  --vd-accent-hover: #8073ff;
+  --vd-accent-soft: #6d5efc33;
+  --vd-on-accent: #ffffff;
+  --vd-danger: #ff5c6c;
+  --vd-warning: #ffb547;
+  --vd-success: #3ddc97;
+
+  /* Timeline clip colours by kind */
+  --vd-clip-video: #2f6fdd;
+  --vd-clip-image: #8a52d9;
+  --vd-clip-audio: #1f9e74;
+  --vd-clip-text: #d9822b;
+  --vd-clip-caption: #c9a227;
+  --vd-playhead: #ff4d6d;
+  --vd-selection: #ffffff;
+  --vd-snap: #ffd84d;
+
+  /* Shape */
+  --vd-radius-sm: 4px;
+  --vd-radius: 6px;
+  --vd-radius-lg: 10px;
+
+  /* Type */
+  --vd-font-ui: 'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --vd-font-mono: 'Roboto Mono', ui-monospace, monospace;
+}

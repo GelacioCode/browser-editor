@@ -1,0 +1,17 @@
+{
+  "name": "@viditor/render",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "@viditor/composition": "workspace:*",
+    "@viditor/project-core": "workspace:*",
+    "mediabunny": "1.62.1"
+  }
+}

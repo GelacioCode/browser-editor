@@ -1,0 +1,111 @@
+@import 'tailwindcss';
+@import './tokens.css';
+
+/* Expose tokens to Tailwind utilities, e.g. bg-surface-2, text-muted, border-border. */
+@theme inline {
+  --color-bg: var(--vd-bg);
+  --color-surface-1: var(--vd-surface-1);
+  --color-surface-2: var(--vd-surface-2);
+  --color-surface-3: var(--vd-surface-3);
+  --color-surface-hover: var(--vd-surface-hover);
+  --color-border: var(--vd-border);
+  --color-border-strong: var(--vd-border-strong);
+  --color-text: var(--vd-text);
+  --color-muted: var(--vd-text-muted);
+  --color-faint: var(--vd-text-faint);
+  --color-accent: var(--vd-accent);
+  --color-accent-hover: var(--vd-accent-hover);
+  --color-accent-soft: var(--vd-accent-soft);
+  --color-on-accent: var(--vd-on-accent);
+  --color-danger: var(--vd-danger);
+  --color-warning: var(--vd-warning);
+  --color-success: var(--vd-success);
+  --color-playhead: var(--vd-playhead);
+  --color-snap: var(--vd-snap);
+  --radius-sm: var(--vd-radius-sm);
+  --radius-md: var(--vd-radius);
+  --radius-lg: var(--vd-radius-lg);
+  --font-sans: var(--vd-font-ui);
+  --font-mono: var(--vd-font-mono);
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--vd-bg);
+  color: var(--vd-text);
+  font-family: var(--vd-font-ui);
+  font-size: 13px;
+  -webkit-font-smoothing: antialiased;
+  overflow: hidden;
+  user-select: none;
+}
+
+input,
+textarea,
+select {
+  user-select: text;
+}
+
+/* Scrollbars */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--vd-border-strong) transparent;
+}
+
+/* Range inputs */
+input[type='range'] {
+  appearance: none;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--vd-surface-3);
+  outline: none;
+}
+input[type='range']::-webkit-slider-thumb {
+  appearance: none;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--vd-text);
+  cursor: pointer;
+}
+input[type='range']:focus-visible::-webkit-slider-thumb {
+  box-shadow: 0 0 0 3px var(--vd-accent-soft);
+}
+
+input[type='color'] {
+  appearance: none;
+  padding: 0;
+  border: 1px solid var(--vd-border);
+  border-radius: var(--vd-radius-sm);
+  width: 28px;
+  height: 22px;
+  background: none;
+  cursor: pointer;
+}
+input[type='color']::-webkit-color-swatch-wrapper {
+  padding: 2px;
+}
+input[type='color']::-webkit-color-swatch {
+  border: none;
+  border-radius: 2px;
+}
+
+.vd-checker {
+  background-image:
+    linear-gradient(45deg, #1b1d24 25%, transparent 25%),
+    linear-gradient(-45deg, #1b1d24 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, #1b1d24 75%),
+    linear-gradient(-45deg, transparent 75%, #1b1d24 75%);
+  background-size: 16px 16px;
+  background-position:
+    0 0,
+    0 8px,
+    8px -8px,
+    -8px 0;
+}

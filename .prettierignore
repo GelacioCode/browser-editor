@@ -1,0 +1,4 @@
+node_modules
+dist
+pnpm-lock.yaml
+docs/Local_Video_Editor_MCP_Project_Guide.md

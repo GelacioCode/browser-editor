@@ -1,0 +1,14 @@
+# Add this to the Caddyfile of the Caddy instance that fronts your VPS.
+# Caddy obtains and renews the HTTPS certificate automatically.
+
+# A) Caddy runs in Docker on the same network as the `viditor` container:
+viditor.samuelgelacio.io {
+	encode zstd gzip
+	reverse_proxy viditor:80
+}
+
+# B) Caddy runs directly on the host and you enabled the loopback port in docker-compose.yml:
+# viditor.samuelgelacio.io {
+# 	encode zstd gzip
+# 	reverse_proxy 127.0.0.1:8088
+# }
