@@ -12,6 +12,11 @@
  */
 
 export const BRIDGE_PROTOCOL_VERSION = 1;
+/**
+ * Bridge release this editor build expects (kept equal to apps/mcp-bridge/package.json; a unit
+ * test checks). Tool definitions are compiled into the bridge, so an older bridge lacks new tools.
+ */
+export const LATEST_BRIDGE_VERSION = '0.2.0';
 export const DEFAULT_BRIDGE_PORT = 47821;
 export const TOKEN_HEADER = 'X-Viditor-Token';
 

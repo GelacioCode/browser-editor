@@ -11,6 +11,7 @@ import {
   XCircle,
   Loader2,
 } from 'lucide-react';
+import { LATEST_BRIDGE_VERSION } from '@viditor/contracts';
 import { apply, useEditor } from '../state/store.ts';
 import {
   clearActivity,
@@ -190,6 +191,16 @@ export function AssistantPanel() {
             </Button>
           )}
         </div>
+        {status === 'connected' && bridgeVersion && bridgeVersion !== LATEST_BRIDGE_VERSION && (
+          <div
+            role="status"
+            className="rounded-md border border-warning/40 bg-warning/10 p-2 text-[11px] text-warning"
+          >
+            A newer bridge (v{LATEST_BRIDGE_VERSION}) is available with more tools. Download it
+            below, replace your copy of <code>viditor-mcp.mjs</code> (same place, same name), then
+            restart your AI app.
+          </div>
+        )}
         {lastError && status !== 'connected' && (
           <p className="text-[11px] text-warning">
             {status === 'searching' && <Loader2 size={10} className="mr-1 inline animate-spin" />}
