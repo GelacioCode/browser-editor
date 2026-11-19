@@ -10,7 +10,7 @@ import {
   Lock,
   Loader2,
 } from 'lucide-react';
-import { usToSeconds, type MediaItem } from '@viditor/project-core';
+import { templateSlots, usToSeconds, type MediaItem } from '@viditor/project-core';
 import { apply, useEditor, type MediaRuntime } from '../state/store.ts';
 import {
   grantMediaAccess,
@@ -19,6 +19,7 @@ import {
   relinkMedia,
 } from '../state/project-io.ts';
 import { addMediaToTimeline } from '../state/actions.ts';
+import { autoFillSlots } from '../state/beats.ts';
 import { Button, IconButton, cx } from '../ui/ui.tsx';
 
 export const MEDIA_DRAG_TYPE = 'application/x-viditor-media';
@@ -122,6 +123,8 @@ export function MediaPanel() {
   const runtime = useEditor((s) => s.media);
   const [over, setOver] = useState(false);
   const needsPermission = media.filter((m) => runtime[m.id]?.status === 'needs-permission').length;
+  const emptySlots = useEditor((s) => (s.project ? templateSlots(s.project).length : 0));
+  const pictures = media.filter((m) => m.kind !== 'audio' && runtime[m.id]?.status === 'ready');
 
   return (
     <div
@@ -153,6 +156,21 @@ export function MediaPanel() {
           after reopening.
           <Button size="sm" className="mt-1.5 w-full" onClick={() => void grantMediaAccess()}>
             Allow access
+          </Button>
+        </div>
+      )}
+
+      {emptySlots > 0 && (
+        <div className="mt-3 rounded-md border border-accent/40 bg-accent-soft p-2 text-[11px] text-text">
+          {emptySlots} empty template slot{emptySlots > 1 ? 's' : ''}. Drag a video onto a slot, or
+          fill them all in order with the videos below.
+          <Button
+            size="sm"
+            className="mt-1.5 w-full"
+            disabled={!pictures.length}
+            onClick={() => autoFillSlots(pictures.map((m) => m.id))}
+          >
+            Auto-fill slots
           </Button>
         </div>
       )}

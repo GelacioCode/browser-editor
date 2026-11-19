@@ -75,6 +75,7 @@ docker compose -p viditor -f deploy/docker-compose.yml --env-file deploy/.env up
 
 - [Architecture](docs/architecture.md)
 - [Feature status & known limitations](docs/feature-status.md)
+- [Beat-sync templates](docs/beat-templates.md)
 - [AI assistant (MCP)](docs/assistant.md)
 - [Privacy](docs/privacy.md)
 - [Deployment](docs/deployment.md)

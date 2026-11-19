@@ -13,6 +13,9 @@ import {
   parseProjectDocument,
   serializeProject,
   visualLayersAt,
+  beatFrames,
+  snapPoints,
+  type Clip,
   type MediaItem,
   type Project,
   type VideoClip,
@@ -276,6 +279,151 @@ describe('ProjectEngine', () => {
     const { p } = setup();
     const again = parseProjectDocument(serializeProject(p()));
     expect(again).toEqual(p());
+  });
+});
+
+describe('beats and templates', () => {
+  const withMusic = () => {
+    const s = setup();
+    const r = s.engine.apply({
+      ops: [
+        { type: 'addMedia', media: media({ id: 'song', kind: 'audio', hasVideo: false }) },
+        { type: 'addMedia', media: media({ id: 'short', durationUs: 1_000_000 }) },
+        { type: 'addMedia', media: media({ id: 'pic', kind: 'image', durationUs: 0 }) },
+        {
+          type: 'addClip',
+          clip: {
+            id: 'music',
+            kind: 'audio',
+            trackId: s.audioTrack,
+            mediaId: 'song',
+            start: 0,
+            duration: 300,
+          },
+        },
+      ],
+    });
+    expect(r.ok).toBe(true);
+    return s;
+  };
+  const clip = (p: Project, id: string) => findClip(p, id) as Clip;
+
+  it('normalises beat markers: sorted, de-duplicated, clamped to the media', () => {
+    const { engine, p } = withMusic();
+    const r = engine.apply({
+      ops: [
+        {
+          type: 'setBeats',
+          clipId: 'music',
+          beatsUs: [1_000_000, 500_000, 510_000, 500_000, 20_000_000],
+        },
+      ],
+    });
+    expect(r.ok).toBe(true);
+    expect(clip(p(), 'music')).toMatchObject({ beatsUs: [500_000, 1_000_000] });
+  });
+
+  it('keeps beats on the music when the clip is moved, trimmed or split', () => {
+    const { engine, p } = withMusic();
+    const fps = p().sequence.fps;
+    engine.apply({
+      ops: [{ type: 'setBeats', clipId: 'music', beatsUs: [500_000, 1_000_000, 1_500_000] }],
+    });
+    expect(beatFrames(clip(p(), 'music'), fps)).toEqual([15, 30, 45]);
+    engine.apply({ ops: [{ type: 'moveClip', clipId: 'music', start: 10 }] });
+    expect(beatFrames(clip(p(), 'music'), fps)).toEqual([25, 40, 55]);
+    engine.apply({ ops: [{ type: 'trimClip', clipId: 'music', edge: 'start', frame: 30 }] });
+    expect(beatFrames(clip(p(), 'music'), fps)).toEqual([40, 55]);
+    engine.apply({ ops: [{ type: 'splitClip', clipId: 'music', frame: 50, newClipId: 'm2' }] });
+    expect(beatFrames(clip(p(), 'music'), fps)).toEqual([40]);
+    expect(beatFrames(clip(p(), 'm2'), fps)).toEqual([55]);
+    expect(snapPoints(p())).toEqual(expect.arrayContaining([40, 55]));
+  });
+
+  it('fills a slot with a video, keeping its timing; undo restores the slot', () => {
+    const { engine, p, videoTrack } = withMusic();
+    engine.apply({ ops: [{ type: 'deleteClip', clipId: 'c1' }] });
+    engine.apply({
+      ops: [
+        {
+          type: 'addClip',
+          clip: { id: 's1', kind: 'slot', trackId: videoTrack, start: 15, duration: 30, index: 1 },
+        },
+      ],
+    });
+    expect(visualLayersAt(p(), 20)).toEqual([]); // empty slots are transparent
+    const r = engine.apply({
+      ops: [{ type: 'replaceClipMedia', clipId: 's1', mediaId: 'm1', sourceInUs: 2_000_000 }],
+    });
+    expect(r.ok).toBe(true);
+    expect(clip(p(), 's1')).toMatchObject({
+      kind: 'video',
+      start: 15,
+      duration: 30,
+      sourceInUs: 2_000_000,
+      templateSlot: 1,
+    });
+    // Swap in an image, then back to an empty slot.
+    engine.apply({ ops: [{ type: 'replaceClipMedia', clipId: 's1', mediaId: 'pic' }] });
+    expect(clip(p(), 's1')).toMatchObject({ kind: 'image', start: 15, duration: 30 });
+    engine.apply({ ops: [{ type: 'clearSlot', clipId: 's1' }] });
+    expect(clip(p(), 's1')).toMatchObject({ kind: 'slot', index: 1, start: 15, duration: 30 });
+    engine.undo();
+    engine.undo();
+    engine.undo();
+    expect(clip(p(), 's1').kind).toBe('slot');
+  });
+
+  it('refuses media shorter than the slot, with a readable message', () => {
+    const { engine, videoTrack } = withMusic();
+    engine.apply({ ops: [{ type: 'deleteClip', clipId: 'c1' }] });
+    engine.apply({
+      ops: [
+        {
+          type: 'addClip',
+          clip: { id: 's1', kind: 'slot', trackId: videoTrack, start: 0, duration: 60, index: 1 },
+        },
+      ],
+    });
+    const r = engine.apply({ ops: [{ type: 'replaceClipMedia', clipId: 's1', mediaId: 'short' }] });
+    expect(r.ok).toBe(false);
+    if (!r.ok) {
+      expect(r.error.code).toBe('INVALID_RANGE');
+      expect(r.error.message).toContain('1.0 s');
+      expect(r.error.message).toContain('2.0 s');
+    }
+  });
+
+  it('clamps a requested in-point so the video fits the slot', () => {
+    const { engine, p } = withMusic();
+    // c1 is 150 frames (5 s) of a 10 s video; ask for an in-point at 9 s.
+    engine.apply({
+      ops: [{ type: 'replaceClipMedia', clipId: 'c1', mediaId: 'm1', sourceInUs: 9_000_000 }],
+    });
+    expect(video(p(), 'c1').sourceInUs).toBe(5_000_000);
+  });
+
+  it('slips the source without moving the clip, within the media bounds', () => {
+    const { engine, p } = setup();
+    expect(
+      engine.apply({ ops: [{ type: 'slipClip', clipId: 'c1', sourceInUs: 3_000_000 }] }).ok,
+    ).toBe(true);
+    expect(video(p(), 'c1')).toMatchObject({ start: 0, duration: 150, sourceInUs: 3_000_000 });
+    const r = engine.apply({ ops: [{ type: 'slipClip', clipId: 'c1', sourceInUs: 5_000_001 }] });
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.error.code).toBe('INVALID_RANGE');
+  });
+
+  it('migrates schema v1 projects', () => {
+    const { p } = setup();
+    const v1 = JSON.parse(serializeProject(p())) as Record<string, unknown> & {
+      clips: Record<string, unknown>[];
+    };
+    v1.schemaVersion = 1;
+    for (const c of v1.clips) delete c.beatsUs;
+    const loaded = parseProjectDocument(JSON.stringify(v1));
+    expect(loaded.schemaVersion).toBe(2);
+    expect(video(loaded, 'c1').beatsUs).toEqual([]);
   });
 });
 

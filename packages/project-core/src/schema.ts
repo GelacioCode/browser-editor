@@ -4,7 +4,7 @@ import { z } from 'zod';
 // `new Function` JIT path so validation never trips the CSP.
 z.config({ jitless: true });
 
-export const SCHEMA_VERSION = 1 as const;
+export const SCHEMA_VERSION = 2 as const;
 
 export const IdSchema = z.string().min(1).max(64);
 export const HexColorSchema = z
@@ -94,6 +94,18 @@ const ClipBase = {
     .max(60 * 60 * 24 * 120),
 };
 
+/**
+ * Beat markers, in source microseconds of the clip's media. Stored for the whole media (not just
+ * the visible range), so moving, trimming or splitting the clip keeps them on the music.
+ */
+export const BeatsSchema = z
+  .array(z.number().int().min(0))
+  .max(20_000)
+  .default(() => []);
+
+/** Number of the beat-template slot this clip fills (1-based), if any. */
+const TemplateSlotSchema = z.number().int().min(1).max(100_000).optional();
+
 export const VideoClipSchema = z.object({
   ...ClipBase,
   kind: z.literal('video'),
@@ -102,6 +114,8 @@ export const VideoClipSchema = z.object({
   speed: z.number().min(0.1).max(10),
   transform: TransformSchema,
   audio: AudioPropsSchema,
+  beatsUs: BeatsSchema,
+  templateSlot: TemplateSlotSchema,
 });
 
 export const AudioClipSchema = z.object({
@@ -111,12 +125,25 @@ export const AudioClipSchema = z.object({
   sourceInUs: z.number().int().min(0),
   speed: z.number().min(0.1).max(10),
   audio: AudioPropsSchema,
+  beatsUs: BeatsSchema,
 });
 
 export const ImageClipSchema = z.object({
   ...ClipBase,
   kind: z.literal('image'),
   mediaId: IdSchema,
+  transform: TransformSchema,
+  templateSlot: TemplateSlotSchema,
+});
+
+/**
+ * An empty beat-template slot: a placeholder with fixed timing that a video or image fills.
+ * It renders nothing (lower tracks show through); the preview overlays a hint instead.
+ */
+export const SlotClipSchema = z.object({
+  ...ClipBase,
+  kind: z.literal('slot'),
+  index: z.number().int().min(1).max(100_000),
   transform: TransformSchema,
 });
 
@@ -142,6 +169,7 @@ export const ClipSchema = z.discriminatedUnion('kind', [
   ImageClipSchema,
   TextClipSchema,
   CaptionClipSchema,
+  SlotClipSchema,
 ]);
 
 export const TrackKindSchema = z.enum(['video', 'audio', 'text', 'caption']);
@@ -208,6 +236,7 @@ export type AudioClip = z.infer<typeof AudioClipSchema>;
 export type ImageClip = z.infer<typeof ImageClipSchema>;
 export type TextClip = z.infer<typeof TextClipSchema>;
 export type CaptionClip = z.infer<typeof CaptionClipSchema>;
+export type SlotClip = z.infer<typeof SlotClipSchema>;
 export type Clip = z.infer<typeof ClipSchema>;
 export type ClipKind = Clip['kind'];
 export type TrackKind = z.infer<typeof TrackKindSchema>;

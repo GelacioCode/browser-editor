@@ -1,6 +1,8 @@
 import type { MediaKind } from '@viditor/project-core';
+import type { BeatAnalysis, BeatMode } from './beats.ts';
 
 export interface AnalyzeRequest {
+  type: 'analyze';
   jobId: number;
   file: File;
   kind: MediaKind;
@@ -23,5 +25,15 @@ export interface AnalysisResult {
   peaksPerSecond: number;
 }
 
+export interface BeatsRequest {
+  type: 'beats';
+  jobId: number;
+  file: File;
+  mode: BeatMode;
+}
+
+export type WorkerRequest = AnalyzeRequest | BeatsRequest;
+
 export type AnalyzeResponse =
-  { jobId: number; ok: true; result: AnalysisResult } | { jobId: number; ok: false; error: string };
+  | { jobId: number; ok: true; result: AnalysisResult | BeatAnalysis }
+  | { jobId: number; ok: false; error: string };

@@ -4,3 +4,4 @@ export * from './probe.ts';
 export * from './analysis-types.ts';
 export * from './analyzer.ts';
 export * from './cache.ts';
+export * from './beats.ts';

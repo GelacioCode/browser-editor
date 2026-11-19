@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { ProjectEngine, createProject, type MediaItem } from '@viditor/project-core';
-import { TOOLS, runTool, type ToolContext } from './index.ts';
+import { TOOLS, runTool, type ToolContext, type ToolOutcome } from './index.ts';
 
 const video: MediaItem = {
   id: 'm1',
@@ -32,7 +32,7 @@ function setup() {
     setPlayhead: (f) => (playhead = f),
     select: (ids) => (selected = ids),
   };
-  const call = (name: string, args: unknown = {}) => runTool(name, args, ctx);
+  const call = (name: string, args: unknown = {}) => runTool(name, args, ctx) as ToolOutcome;
   return { engine, ctx, call, selected: () => selected, playhead: () => playhead };
 }
 
@@ -173,6 +173,61 @@ describe('assistant tools', () => {
       ok: false,
       errorCode: 'UNSUPPORTED',
     });
+  });
+
+  it('beat template flow: detect beats, cut a template, fill it, slip a clip', async () => {
+    const { call, engine, ctx } = setup();
+    const song: MediaItem = {
+      ...video,
+      id: 'song',
+      kind: 'audio',
+      label: 'Audio 1',
+      hasVideo: false,
+      width: 0,
+      height: 0,
+      fps: null,
+      durationUs: 8_000_000,
+    };
+    engine.apply({ ops: [{ type: 'addMedia', media: song }] });
+    expect(call('add_media_to_timeline', { mediaId: 'song', startSeconds: 0 }).ok).toBe(true);
+    const music = engine.project.clips.find((c) => c.kind === 'audio')!;
+    // 120 BPM: a beat every 0.5 s starting at 0.5 s.
+    ctx.detectBeats = async (mediaId, mode) => {
+      expect([mediaId, mode]).toEqual(['song', 'bass']);
+      return { bpm: 120, beatsUs: Array.from({ length: 15 }, (_, i) => 500_000 * (i + 1)) };
+    };
+    const d = await runTool('detect_beats', { clipId: music.id, mode: 'bass' }, ctx);
+    expect(d).toMatchObject({ ok: true, data: { bpm: 120, markerCount: 15 } });
+    expect((d.data as { markerSeconds: number[] }).markerSeconds.slice(0, 3)).toEqual([
+      0.5, 1, 1.5,
+    ]);
+
+    const t = call('create_beat_template', { clipId: music.id, everyNBeats: 2 });
+    expect(t.ok).toBe(true);
+    const slots = (t.data as { slots: { slotId: string; startSeconds: number }[] }).slots;
+    // Cuts at 0.5, 1.5, 2.5 … 7.5 → 0–0.5, then 1 s slots, then 7.5–8.
+    expect(slots.map((s) => s.startSeconds)).toEqual([0, 0.5, 1.5, 2.5, 3.5, 4.5, 5.5, 6.5, 7.5]);
+    expect(engine.project.tracks[0]).toMatchObject({ kind: 'video', name: 'Template' });
+
+    const f = call('fill_slots', { autoFillWith: ['m1'] });
+    expect(f.ok).toBe(true);
+    const filled = engine.project.clips.filter((c) => c.kind === 'video');
+    expect(filled).toHaveLength(9);
+    // Reusing one video continues through it rather than repeating its opening.
+    const ins = filled
+      .sort((a, b) => a.start - b.start)
+      .map((c) => (c.kind === 'video' ? c.sourceInUs : -1));
+    expect(ins[1]).toBeGreaterThan(ins[0]!);
+
+    const target = filled[2]!;
+    expect(call('slip_clip', { clipId: target.id, sourceInSeconds: 6 }).ok).toBe(true);
+    const slipped = engine.project.clips.find((c) => c.id === target.id)!;
+    expect(slipped).toMatchObject({
+      start: target.start,
+      duration: target.duration,
+      sourceInUs: 6_000_000,
+    });
+    expect(JSON.stringify(call('get_timeline').data)).toContain('slotNumber');
   });
 
   it('show_in_editor moves the playhead without changing the project', () => {

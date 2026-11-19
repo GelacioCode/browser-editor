@@ -18,6 +18,9 @@ const SHORTCUTS: [string, string][] = [
   ['N', 'Toggle snapping'],
   ['Shift + click', 'Add / remove clip from selection'],
   ['Alt + drag', 'Move clip without snapping'],
+  ['Ctrl + drag', 'Slip: change which part of a video plays, keeping the clip in place'],
+  ['B', 'Tap a beat marker at the playhead (on the selected music clip)'],
+  ['Delete (marker selected)', 'Remove the selected beat marker'],
 ];
 
 export function ShortcutsDialog({ onClose }: { onClose: () => void }) {

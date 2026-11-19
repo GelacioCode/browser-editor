@@ -68,6 +68,12 @@ Times are in seconds. Edits accept optional `expectedRevision` (reject if the pr
 | `apply_operations`      | Advanced: atomic batch of raw engine operations (frames)                          |
 | `undo` / `redo`         | Undo or redo the last change                                                      |
 | `show_in_editor`        | Move the playhead / select clips to point the user at something                   |
+| `detect_beats`          | Analyse a music clip in the editor (beat or bass mode) and place markers          |
+| `get_beats`             | A clip's beat markers as timeline seconds                                         |
+| `set_beats`             | Replace a clip's beat markers with given timeline times                           |
+| `create_beat_template`  | Template track of empty slots cut on every Nth marker                             |
+| `fill_slots`            | Put videos/images into slots (explicitly, or auto-fill in order)                  |
+| `slip_clip`             | Choose which part of the source plays, keeping the clip's timing                  |
 
 The assistant **cannot** import files, export video, read your footage, or touch the file
 system. Those stay with you and your browser's file pickers.

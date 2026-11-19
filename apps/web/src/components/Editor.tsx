@@ -17,6 +17,7 @@ import {
   splitAtPlayhead,
 } from '../state/actions.ts';
 import { saveNow } from '../state/project-io.ts';
+import { deleteSelectedBeat, tapBeat } from '../state/beats.ts';
 import { resumeAssistantIfEnabled } from '../state/assistant.ts';
 
 function usePersistedNumber(key: string, initial: number): [number, (v: number) => void] {
@@ -96,8 +97,10 @@ function useShortcuts() {
       else if (mod && k === 'a') select(s.project.clips.map((c) => c.id));
       else if (mod && k === 'e') openDialog('export');
       else if (!mod && k === 's') splitAtPlayhead();
-      else if (k === 'delete' || k === 'backspace') deleteSelection();
-      else if (k === 'escape') select([]);
+      else if (!mod && k === 'b') tapBeat();
+      else if (k === 'delete' || k === 'backspace') {
+        if (!deleteSelectedBeat()) deleteSelection();
+      } else if (k === 'escape') select([]);
       else if (k === 'arrowleft')
         setPlayhead(s.playhead - (e.shiftKey ? secondsToNearestFrame(1, fps) : 1));
       else if (k === 'arrowright')

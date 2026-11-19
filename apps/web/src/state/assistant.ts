@@ -10,6 +10,7 @@ import {
   type ToolOutcome,
 } from '@viditor/contracts';
 import { select, setPlayhead, toast, useEditor } from './store.ts';
+import { analyzeBeats } from './project-io.ts';
 
 /**
  * Connection from this tab to the local viditor-mcp bridge (127.0.0.1). Off until the user clicks
@@ -158,11 +159,12 @@ async function handleCall(call: BridgeCall) {
       message: 'No project is open in Viditor. Ask the user to open or create one.',
     };
   } else {
-    outcome = runTool(call.tool, call.args, {
+    outcome = await runTool(call.tool, call.args, {
       engine: editor.engine,
       getPlayhead: () => useEditor.getState().playhead,
       setPlayhead,
       select: (ids) => select(ids),
+      detectBeats: (mediaId, mode) => analyzeBeats(mediaId, mode),
     });
   }
   set((s) => ({

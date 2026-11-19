@@ -36,6 +36,10 @@
   --vd-playhead: #ff4d6d;
   --vd-selection: #ffffff;
   --vd-snap: #ffd84d;
+  /* Beat markers and beat-template slots */
+  --vd-beat: #38d6f5;
+  --vd-beat-guide: #38d6f526;
+  --vd-clip-slot: #1d2230;
 
   /* Shape */
   --vd-radius-sm: 4px;

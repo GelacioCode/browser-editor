@@ -22,11 +22,14 @@ import {
 } from 'lucide-react';
 import {
   TRACK_ACCEPTS,
+  allBeatFrames,
+  clipEnd,
   findMedia,
   fpsToNumber,
   isTimedMediaClip,
   maxFramesFrom,
   sequenceDuration,
+  slipRangeUs,
   snapPoints,
   sourceUsToFrames,
   type Clip,
@@ -42,6 +45,7 @@ import {
   splitAtPlayhead,
 } from '../../state/actions.ts';
 import { IconButton, cx } from '../../ui/ui.tsx';
+import { fillSlot, moveBeat } from '../../state/beats.ts';
 import { MEDIA_DRAG_TYPE } from '../MediaPanel.tsx';
 import { ClipView } from './ClipView.tsx';
 import { Ruler } from './Ruler.tsx';
@@ -55,7 +59,8 @@ const TRACK_ICON: Record<TrackKind, typeof Film> = {
 };
 
 interface DragState {
-  mode: 'move' | 'trim-start' | 'trim-end';
+  /** 'slip' (Ctrl/⌘ + drag): change which part of the source shows; the clip stays put. */
+  mode: 'move' | 'trim-start' | 'trim-end' | 'slip';
   clipId: string;
   /** Other selected clips moved together (move mode only). */
   group: string[];
@@ -67,6 +72,24 @@ interface DragState {
   duration: number;
   trackId: string;
   snapAt: number | null;
+  /** Slip mode: source in-point at drag start, and the undo-coalescing key. */
+  origIn?: number;
+  slipKey?: string;
+}
+
+interface BeatDrag {
+  clipId: string;
+  us: number;
+  startClientX: number;
+  moved: boolean;
+  curUs: number;
+}
+
+let slipSeq = 0;
+
+/** A template slot, or a clip that fills one: dropping library media on it swaps the media. */
+function isTemplateClip(c: Clip) {
+  return c.kind === 'slot' || ((c.kind === 'video' || c.kind === 'image') && !!c.templateSlot);
 }
 
 function TrackHeader({ track, empty }: { track: Track; empty: boolean }) {
@@ -184,6 +207,10 @@ export function Timeline() {
   const [drag, setDrag] = useState<DragState | null>(null);
   const dragRef = useRef<DragState | null>(null);
   const [dropTrack, setDropTrack] = useState<string | null>(null);
+  const [dropSlot, setDropSlot] = useState<string | null>(null);
+  const [beatDrag, setBeatDrag] = useState<BeatDrag | null>(null);
+  const beatDragRef = useRef<BeatDrag | null>(null);
+  const selectedBeat = useEditor((s) => s.selectedBeat);
 
   const fps = project.sequence.fps;
   const rate = fpsToNumber(fps);
@@ -292,6 +319,25 @@ export function Timeline() {
     if (!sel.includes(clip.id)) select([clip.id]);
     const track = project.tracks.find((t) => t.id === clip.trackId);
     if (track?.locked) return;
+    if (mode === 'move' && (e.ctrlKey || e.metaKey) && isTimedMediaClip(clip)) {
+      const d: DragState = {
+        mode: 'slip',
+        clipId: clip.id,
+        group: [],
+        startClientX: e.clientX,
+        orig: { start: clip.start, duration: clip.duration, trackId: clip.trackId },
+        moved: false,
+        start: clip.start,
+        duration: clip.duration,
+        trackId: clip.trackId,
+        snapAt: null,
+        origIn: clip.sourceInUs,
+        slipKey: `slip:${clip.id}:${++slipSeq}`,
+      };
+      dragRef.current = d;
+      setDrag(d);
+      return;
+    }
     const group =
       mode === 'move' && sel.includes(clip.id) ? sel.filter((id) => id !== clip.id) : [];
     const d: DragState = {
@@ -322,6 +368,30 @@ export function Timeline() {
       if (!d.moved && Math.abs(e.clientX - d.startClientX) < 3) return;
       const ignore = [d.clipId, ...d.group];
       const next: DragState = { ...d, moved: true };
+
+      if (d.mode === 'slip') {
+        // Grab the footage: dragging right reveals earlier frames, like sliding film in a gate.
+        if (!isTimedMediaClip(clip)) return;
+        const m = findMedia(p, clip.mediaId);
+        if (!m) return;
+        const range = slipRangeUs(clip, m, fps);
+        const deltaUs = ((e.clientX - d.startClientX) / zoom) * clip.speed * 1_000_000;
+        const sourceInUs = Math.round(
+          Math.min(range.max, Math.max(range.min, (d.origIn ?? 0) - deltaUs)),
+        );
+        if (!d.moved) {
+          const ph = useEditor.getState().playhead;
+          if (ph < clip.start || ph >= clipEnd(clip)) setPlayhead(clip.start);
+        }
+        if (sourceInUs !== clip.sourceInUs)
+          apply(
+            { type: 'slipClip', clipId: clip.id, sourceInUs },
+            { label: 'Slip clip', coalesceKey: d.slipKey, notify: false },
+          );
+        dragRef.current = next;
+        setDrag(next);
+        return;
+      }
 
       if (d.mode === 'move') {
         let start = Math.max(0, d.orig.start + rawDelta);
@@ -371,6 +441,7 @@ export function Timeline() {
         // A click (no drag) on a clip also moves the playhead there.
         return;
       }
+      if (d.mode === 'slip') return; // already applied live
       if (d.mode === 'move') {
         const delta = d.start - d.orig.start;
         if (delta === 0 && d.trackId === d.orig.trackId) return;
@@ -411,20 +482,98 @@ export function Timeline() {
   }, [drag !== null, pxPerFrame]);
 
   /* ---------------------------------------------------------------------------------------- */
+  /* Beat markers: drag to move, click to select (Delete removes)                              */
+  /* ---------------------------------------------------------------------------------------- */
+
+  const onBeatPointerDown = (e: React.PointerEvent, clip: Clip, us: number) => {
+    if (e.button !== 0) return;
+    useEditor.setState({ selection: [clip.id], selectedBeat: { clipId: clip.id, us } });
+    if (project.tracks.find((t) => t.id === clip.trackId)?.locked) return;
+    const d: BeatDrag = { clipId: clip.id, us, startClientX: e.clientX, moved: false, curUs: us };
+    beatDragRef.current = d;
+    setBeatDrag(d);
+  };
+
+  useEffect(() => {
+    if (!beatDrag) return;
+    const onMove = (e: PointerEvent) => {
+      const d = beatDragRef.current;
+      if (!d) return;
+      const p = useEditor.getState().project!;
+      const clip = p.clips.find((c) => c.id === d.clipId);
+      if (!clip || !isTimedMediaClip(clip)) return;
+      if (!d.moved && Math.abs(e.clientX - d.startClientX) < 3) return;
+      let curUs = d.us + ((e.clientX - d.startClientX) / zoom) * clip.speed * 1_000_000;
+      // Snap to the playhead (handy when correcting a marker while listening).
+      const st = useEditor.getState();
+      if (st.snapping && !e.altKey) {
+        const atFrame = clip.start + ((curUs - clip.sourceInUs) / 1_000_000 / clip.speed) * rate;
+        if (Math.abs(atFrame - st.playhead) * pxPerFrame <= SNAP_PX)
+          curUs = clip.sourceInUs + ((st.playhead - clip.start) / rate) * clip.speed * 1_000_000;
+      }
+      const next = { ...d, moved: true, curUs };
+      beatDragRef.current = next;
+      setBeatDrag(next);
+    };
+    const onUp = () => {
+      const d = beatDragRef.current;
+      beatDragRef.current = null;
+      setBeatDrag(null);
+      if (d?.moved && Math.round(d.curUs) !== d.us) moveBeat(d.clipId, d.us, d.curUs);
+    };
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp);
+    window.addEventListener('pointercancel', onUp);
+    return () => {
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
+      window.removeEventListener('pointercancel', onUp);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [beatDrag !== null, zoom]);
+
+  /** Timeline x (content px) of a dragged beat marker, for the ghost line. */
+  const beatGhostX = (() => {
+    if (!beatDrag?.moved) return null;
+    const clip = project.clips.find((c) => c.id === beatDrag.clipId);
+    if (!clip || !isTimedMediaClip(clip)) return null;
+    return (
+      (clip.start + ((beatDrag.curUs - clip.sourceInUs) / 1_000_000 / clip.speed) * rate) *
+      pxPerFrame
+    );
+  })();
+
+  /* ---------------------------------------------------------------------------------------- */
   /* Media drops from the library                                                              */
   /* ---------------------------------------------------------------------------------------- */
+
+  const templateClipAt = (trackId: string | null, clientX: number) => {
+    if (!trackId) return undefined;
+    const f = frameFromClientX(clientX);
+    return project.clips.find(
+      (c) => c.trackId === trackId && f >= c.start && f < clipEnd(c) && isTemplateClip(c),
+    );
+  };
 
   const onLaneDragOver = (e: React.DragEvent, trackId: string | null) => {
     if (!e.dataTransfer.types.includes(MEDIA_DRAG_TYPE)) return;
     e.preventDefault();
     e.dataTransfer.dropEffect = 'copy';
-    setDropTrack(trackId ?? '__new');
+    const slot = templateClipAt(trackId, e.clientX);
+    setDropSlot(slot?.id ?? null);
+    setDropTrack(slot ? null : (trackId ?? '__new'));
   };
   const onLaneDrop = (e: React.DragEvent, track: Track | null) => {
     const id = e.dataTransfer.getData(MEDIA_DRAG_TYPE);
     setDropTrack(null);
+    setDropSlot(null);
     if (!id) return;
     e.preventDefault();
+    const slot = templateClipAt(track?.id ?? null, e.clientX);
+    if (slot) {
+      fillSlot(slot.id, id);
+      return;
+    }
     const frame = frameFromClientX(e.clientX);
     const m = findMedia(project, id);
     const compatible = track && m && TRACK_ACCEPTS[track.kind].includes(m.kind);
@@ -453,6 +602,10 @@ export function Timeline() {
 
   const visibleL = viewport.scrollLeft - 200;
   const visibleR = viewport.scrollLeft + viewport.width + 200;
+  const beatGuides = allBeatFrames(project).filter((f) => {
+    const x = f * pxPerFrame;
+    return x >= visibleL && x <= visibleR;
+  });
   const hasSelection = selection.length > 0;
 
   return (
@@ -555,7 +708,10 @@ export function Timeline() {
                     scrub(frameFromClientX(e.clientX) * pxPerFrame);
                   }}
                   onDragOver={(e) => onLaneDragOver(e, track.id)}
-                  onDragLeave={() => setDropTrack(null)}
+                  onDragLeave={() => {
+                    setDropTrack(null);
+                    setDropSlot(null);
+                  }}
                   onDrop={(e) => onLaneDrop(e, track)}
                 >
                   {trackClips.map((c) => {
@@ -572,8 +728,13 @@ export function Timeline() {
                         height={h}
                         selected={selection.includes(c.id)}
                         dragging={
-                          !!drag?.moved && (drag.clipId === c.id || drag.group.includes(c.id))
+                          !!drag?.moved &&
+                          drag.mode !== 'slip' &&
+                          (drag.clipId === c.id || drag.group.includes(c.id))
                         }
+                        dropTarget={dropSlot === c.id}
+                        selectedBeatUs={selectedBeat?.clipId === c.id ? selectedBeat.us : null}
+                        onBeatPointerDown={onBeatPointerDown}
                         media={'mediaId' in c ? findMedia(project, c.mediaId) : undefined}
                         runtime={'mediaId' in c ? media[c.mediaId] : undefined}
                         fps={fps}
@@ -613,6 +774,21 @@ export function Timeline() {
               </span>
             </div>
           </div>
+
+          {/* Beat guides across all tracks */}
+          {beatGuides.map((f) => (
+            <div
+              key={f}
+              className="pointer-events-none absolute bottom-0 z-[5] w-px bg-beat-guide"
+              style={{ left: HEADER_W + f * pxPerFrame, top: RULER_H }}
+            />
+          ))}
+          {beatGhostX !== null && (
+            <div
+              className="pointer-events-none absolute bottom-0 top-0 z-30 w-px bg-white"
+              style={{ left: HEADER_W + beatGhostX }}
+            />
+          )}
 
           {/* Snap indicator */}
           {drag?.snapAt != null && (

@@ -1,5 +1,5 @@
 import { memo, useEffect, useRef } from 'react';
-import { Gauge, AlertTriangle } from 'lucide-react';
+import { Gauge, AlertTriangle, LayoutTemplate } from 'lucide-react';
 import {
   frameToSeconds,
   usToSeconds,
@@ -17,6 +17,7 @@ const KIND_COLOR: Record<Clip['kind'], string> = {
   audio: 'var(--vd-clip-audio)',
   text: 'var(--vd-clip-text)',
   caption: 'var(--vd-clip-caption)',
+  slot: 'var(--vd-clip-slot)',
 };
 
 interface Props {
@@ -27,6 +28,11 @@ interface Props {
   height: number;
   selected: boolean;
   dragging: boolean;
+  /** A library item is being dragged over this template clip. */
+  dropTarget?: boolean;
+  /** Source µs of the selected beat marker on this clip, if any. */
+  selectedBeatUs?: number | null;
+  onBeatPointerDown?: (e: React.PointerEvent, clip: Clip, us: number) => void;
   media?: MediaItem;
   runtime?: MediaRuntime;
   fps: Rational;
@@ -133,6 +139,68 @@ function Waveform({
   );
 }
 
+/** Beat marker ticks (source µs → clip-local px), drawn for the visible part of the clip. */
+function BeatTicks(p: Props) {
+  const { clip } = p;
+  if (!('beatsUs' in clip) || clip.beatsUs.length === 0) return null;
+  const pxPerUs = p.pxPerSecond / 1_000_000 / clip.speed;
+  const ticks = [];
+  for (const us of clip.beatsUs) {
+    const x = (us - clip.sourceInUs) * pxPerUs;
+    if (x < 0 || x >= p.width) continue;
+    if (x < p.visibleFrom - 10 || x > p.visibleTo + 10) continue;
+    const sel = p.selectedBeatUs === us;
+    ticks.push(
+      <div
+        key={us}
+        data-beat={us}
+        title="Beat marker: drag to move · click, then Delete to remove"
+        className="group/beat absolute top-0 z-10 h-full w-[11px] -translate-x-1/2 cursor-ew-resize"
+        style={{ left: x }}
+        onPointerDown={(e) => {
+          e.stopPropagation();
+          p.onBeatPointerDown?.(e, clip, us);
+        }}
+      >
+        <div
+          className={cx(
+            'absolute left-1/2 top-0 h-full w-px -translate-x-1/2',
+            sel ? 'bg-white' : 'bg-beat/80 group-hover/beat:bg-white',
+          )}
+        />
+        <div
+          className={cx(
+            'absolute left-1/2 top-0 h-0 w-0 -translate-x-1/2 border-x-[4px] border-t-[6px] border-x-transparent',
+            sel ? 'border-t-white' : 'border-t-beat',
+          )}
+        />
+      </div>,
+    );
+  }
+  return <>{ticks}</>;
+}
+
+function SlotBody({
+  clip,
+  width,
+  fps,
+}: {
+  clip: Extract<Clip, { kind: 'slot' }>;
+  width: number;
+  fps: Rational;
+}) {
+  const secs = frameToSeconds(clip.duration, fps);
+  return (
+    <div className="pointer-events-none absolute inset-0 flex flex-col justify-center gap-0.5 overflow-hidden rounded-[5px] border border-dashed border-white/35 px-1.5 text-[10px] leading-tight text-muted">
+      <span className="flex items-center gap-1 font-medium text-text">
+        <LayoutTemplate size={10} className="shrink-0" />#{clip.index}
+        {width > 70 && <span className="tabular-nums text-faint">{secs.toFixed(2)}s</span>}
+      </span>
+      {width > 90 && <span className="truncate text-faint">Drop a clip</span>}
+    </div>
+  );
+}
+
 export const ClipView = memo(function ClipView(p: Props) {
   const { clip, media, runtime } = p;
   const offline =
@@ -140,7 +208,10 @@ export const ClipView = memo(function ClipView(p: Props) {
   const label =
     clip.kind === 'text' || clip.kind === 'caption'
       ? clip.text.split('\n')[0] || '(empty)'
-      : (media?.name ?? 'Media');
+      : clip.kind === 'slot'
+        ? ''
+        : (media?.name ?? 'Media');
+  const slotNo = (clip.kind === 'video' || clip.kind === 'image') && clip.templateSlot;
   const showWave =
     (clip.kind === 'audio' || (clip.kind === 'video' && media?.hasAudio)) && !!runtime?.peaks;
   const waveH = clip.kind === 'audio' ? p.height - 16 : 16;
@@ -156,6 +227,7 @@ export const ClipView = memo(function ClipView(p: Props) {
         'group absolute top-0.5 overflow-hidden rounded-[5px] text-white',
         p.dragging ? 'z-20 opacity-90 shadow-lg' : 'z-10',
         p.selected ? 'ring-2 ring-white' : 'ring-1 ring-black/40',
+        p.dropTarget && 'ring-2 ring-accent brightness-125',
       )}
       style={{
         left: p.left,
@@ -174,6 +246,7 @@ export const ClipView = memo(function ClipView(p: Props) {
         );
       }}
     >
+      {clip.kind === 'slot' && <SlotBody clip={clip} width={p.width} fps={p.fps} />}
       {(clip.kind === 'video' || clip.kind === 'image') && (
         <Thumbs
           clip={clip}
@@ -216,8 +289,14 @@ export const ClipView = memo(function ClipView(p: Props) {
           <path d="M0 0 L10 10 L10 0 Z" fill="rgba(0,0,0,0.35)" />
         </svg>
       )}
+      <BeatTicks {...p} />
       <div className="pointer-events-none relative flex items-center gap-1 px-1.5 pt-0.5 text-[10px] font-medium leading-tight [text-shadow:0_1px_2px_rgba(0,0,0,0.8)]">
         {offline && <AlertTriangle size={10} className="shrink-0 text-warning" />}
+        {slotNo && (
+          <span className="flex shrink-0 items-center gap-0.5 rounded bg-black/40 px-1">
+            <LayoutTemplate size={9} />#{slotNo}
+          </span>
+        )}
         {speed && (
           <span className="flex shrink-0 items-center gap-0.5 rounded bg-black/40 px-1">
             <Gauge size={9} />

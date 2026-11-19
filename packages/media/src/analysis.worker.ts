@@ -3,8 +3,11 @@ import type {
   AnalysisResult,
   AnalyzeRequest,
   AnalyzeResponse,
+  BeatsRequest,
   ThumbBlob,
+  WorkerRequest,
 } from './analysis-types.ts';
+import { MonoDownmixer, detectBeats, type BeatAnalysis } from './beats.ts';
 
 /**
  * Off-main-thread media analysis: timeline thumbnails and audio waveform peaks.
@@ -89,11 +92,47 @@ async function analyzeAv(req: AnalyzeRequest): Promise<AnalysisResult> {
   }
 }
 
-self.onmessage = async (e: MessageEvent<AnalyzeRequest>) => {
+/** Decode the primary audio track to ~11 kHz mono and find beats or bass hits. */
+async function analyzeBeats(req: BeatsRequest): Promise<BeatAnalysis> {
+  const input = new Input({ formats: ALL_FORMATS, source: new BlobSource(req.file) });
+  try {
+    const audio = await input.getPrimaryAudioTrack();
+    if (!audio) throw new Error('This file has no audio track');
+    if (!(await audio.canDecode())) throw new Error('This browser cannot decode the audio');
+    const mix = new MonoDownmixer();
+    const sink = new AudioSampleSink(audio);
+    let planes: Float32Array[] = [];
+    let offset: number | null = null;
+    for await (const sample of sink.samples()) {
+      offset ??= Math.max(0, sample.timestamp);
+      const n = sample.numberOfFrames;
+      const ch = sample.numberOfChannels;
+      if (planes.length !== ch || planes[0]!.length < n)
+        planes = Array.from({ length: ch }, () => new Float32Array(n));
+      for (let c = 0; c < ch; c++)
+        sample.copyTo(planes[c]!, { planeIndex: c, format: 'f32-planar' });
+      mix.push(planes, n, sample.sampleRate);
+      sample.close();
+    }
+    const { samples, rate } = mix.finish();
+    const r = detectBeats(samples, rate, req.mode);
+    const shift = Math.round((offset ?? 0) * 1_000_000);
+    return { ...r, beatsUs: r.beatsUs.map((b) => b + shift) };
+  } finally {
+    input.dispose();
+  }
+}
+
+self.onmessage = async (e: MessageEvent<WorkerRequest>) => {
   const req = e.data;
   let msg: AnalyzeResponse;
   try {
-    const result = req.kind === 'image' ? await imageThumb(req) : await analyzeAv(req);
+    const result =
+      req.type === 'beats'
+        ? await analyzeBeats(req)
+        : req.kind === 'image'
+          ? await imageThumb(req)
+          : await analyzeAv(req);
     msg = { jobId: req.jobId, ok: true, result };
   } catch (err) {
     msg = { jobId: req.jobId, ok: false, error: err instanceof Error ? err.message : String(err) };

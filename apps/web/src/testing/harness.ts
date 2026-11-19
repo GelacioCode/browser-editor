@@ -226,3 +226,89 @@ export async function runE2E(): Promise<E2EResult> {
     undo: { clipsAfterSplit, clipsAfterUndo },
   };
 }
+
+/* -------------------------------------------------------------------------------------------- */
+/* Beat templates                                                                                */
+/* -------------------------------------------------------------------------------------------- */
+
+/** A 120 BPM click track as a 16-bit mono WAV: clicks at 0.25 s + k × 0.5 s. */
+export function makeClickTrack(seconds = 4, rate = 44100): File {
+  const n = Math.round(seconds * rate);
+  const pcm = new Int16Array(n);
+  for (let t = 0.25; t < seconds; t += 0.5) {
+    const s = Math.round(t * rate);
+    for (let j = 0; j < 0.03 * rate && s + j < n; j++) {
+      const tt = j / rate;
+      const v = 0.8 * Math.sin(2 * Math.PI * 1500 * tt) * Math.exp(-tt / 0.008);
+      pcm[s + j] = Math.round(v * 32767);
+    }
+  }
+  const buf = new ArrayBuffer(44 + n * 2);
+  const v = new DataView(buf);
+  const str = (o: number, s: string) =>
+    [...s].forEach((c, i) => v.setUint8(o + i, c.charCodeAt(0)));
+  str(0, 'RIFF');
+  v.setUint32(4, 36 + n * 2, true);
+  str(8, 'WAVE');
+  str(12, 'fmt ');
+  v.setUint32(16, 16, true);
+  v.setUint16(20, 1, true); // PCM
+  v.setUint16(22, 1, true); // mono
+  v.setUint32(24, rate, true);
+  v.setUint32(28, rate * 2, true);
+  v.setUint16(32, 2, true);
+  v.setUint16(34, 16, true);
+  str(36, 'data');
+  v.setUint32(40, n * 2, true);
+  new Int16Array(buf, 44).set(pcm);
+  return new File([buf], 'click-120.wav', { type: 'audio/wav', lastModified: 1 });
+}
+
+/** Open a project with the RGB test video and a click track; the click track is on the timeline. */
+export async function openTemplateDemo(): Promise<{ videoId: string; audioId: string }> {
+  const { createProjectInFolder, importHandles } = await import('../state/project-io.ts');
+  const { addMediaToTimeline } = await import('../state/actions.ts');
+  const root = await navigator.storage.getDirectory();
+  await root.removeEntry('template-project', { recursive: true }).catch(() => {});
+  const dir = await root.getDirectoryHandle('template-project', { create: true });
+  const write = async (file: File) => {
+    const fh = await dir.getFileHandle(file.name, { create: true });
+    const w = await fh.createWritable();
+    await w.write(file);
+    await w.close();
+    return fh;
+  };
+  const vh = await write(await makeTestVideo());
+  const ah = await write(makeClickTrack());
+  await createProjectInFolder(dir, 'Template test');
+  const [videoId, audioId] = await importHandles([vh, ah]);
+  if (!videoId || !audioId) throw new Error('import failed');
+  addMediaToTimeline(audioId, 0);
+  return { videoId, audioId };
+}
+
+/** Export the project open in the editor to OPFS and sample pixels (x, y in output pixels). */
+export async function exportEditorProject(
+  samples: Record<string, { t: number; x: number; y: number }>,
+): Promise<Record<string, [number, number, number]>> {
+  const { useEditor } = await import('../state/store.ts');
+  const { availableFiles } = await import('../state/project-io.ts');
+  await ensureFontsLoaded();
+  const project = useEditor.getState().project!;
+  const root = await navigator.storage.getDirectory();
+  const target = await root.getFileHandle('template-export.mp4', { create: true });
+  const job = startExport({
+    project,
+    files: availableFiles(),
+    fonts: FONT_FILES,
+    target,
+    onProgress: () => {},
+  });
+  const status = await job.done;
+  if (status !== 'done') throw new Error(`Export ${status}`);
+  const out = await target.getFile();
+  const result: Record<string, [number, number, number]> = {};
+  for (const [k, s] of Object.entries(samples)) result[k] = await pixelAt(out, s.t, s.x, s.y);
+  await root.removeEntry('template-export.mp4').catch(() => {});
+  return result;
+}

@@ -1,4 +1,5 @@
 import {
+  beatFrames,
   clipEnd,
   frameToSeconds,
   fpsToNumber,
@@ -64,6 +65,14 @@ export function clipView(c: Clip, project: Project) {
     extra.sourceInSeconds = r3(usToSeconds(c.sourceInUs));
     extra.speed = c.speed;
   }
+  if (c.kind === 'slot') {
+    extra.slotNumber = c.index;
+    extra.empty = true;
+  }
+  if ((c.kind === 'video' || c.kind === 'image') && c.templateSlot)
+    extra.slotNumber = c.templateSlot;
+  if ((c.kind === 'video' || c.kind === 'audio') && c.beatsUs.length)
+    extra.beatMarkers = beatFrames(c, fps).length;
   if ('audio' in c) {
     extra.audio = {
       volumeDb: r3(gainToDbSafe(c.audio.gain)),

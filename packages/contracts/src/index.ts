@@ -7,3 +7,4 @@ export * from './protocol.ts';
 export * from './tools.ts';
 export * from './views.ts';
 export * from './planning.ts';
+export * from './templates.ts';

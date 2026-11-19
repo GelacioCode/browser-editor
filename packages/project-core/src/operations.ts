@@ -15,6 +15,7 @@ import {
   TransformSchema,
   VideoClipSchema,
   AudioClipSchema,
+  SlotClipSchema,
   type Clip,
   type Project,
   type TimedMediaClip,
@@ -31,7 +32,7 @@ import {
   newId,
 } from './defaults.ts';
 import { clipEnd, findOverlap, isTimedMediaClip, maxFramesFrom } from './model.ts';
-import { framesToSourceUs } from './time.ts';
+import { framesToSourceUs, US_PER_SECOND } from './time.ts';
 
 /* ------------------------------------------------------------------------------------------------
  * Errors
@@ -102,6 +103,10 @@ const ClipInputSchema = z.discriminatedUnion('kind', [
     id: IdSchema.optional(),
     style: TextStyleSchema.default(() => clone(DEFAULT_CAPTION_STYLE)),
     transform: TransformSchema.default(() => clone(DEFAULT_CAPTION_TRANSFORM)),
+  }),
+  SlotClipSchema.extend({
+    id: IdSchema.optional(),
+    transform: TransformSchema.default(() => clone(DEFAULT_TRANSFORM)),
   }),
 ]);
 
@@ -197,6 +202,28 @@ export const OperationSchema = z.discriminatedUnion('type', [
     trackId: IdSchema.optional(),
     clipId: IdSchema.optional(),
   }),
+
+  /** Replace the beat markers of a video/audio clip (source µs of its media). */
+  z.object({
+    type: z.literal('setBeats'),
+    clipId: IdSchema,
+    beatsUs: z.array(z.number().int().min(0)).max(20_000),
+  }),
+  /**
+   * Put a different video or image into a clip's place, keeping its timing exactly. Works on
+   * empty template slots and on video/image clips (to swap what fills a slot).
+   */
+  z.object({
+    type: z.literal('replaceClipMedia'),
+    clipId: IdSchema,
+    mediaId: IdSchema,
+    /** Where in the new video the clip starts. Defaults to 0. */
+    sourceInUs: z.number().int().min(0).optional(),
+  }),
+  /** Choose which part of the source shows, without changing the clip's timing. */
+  z.object({ type: z.literal('slipClip'), clipId: IdSchema, sourceInUs: z.number().int().min(0) }),
+  /** Turn a video/image clip back into an empty template slot with the same timing. */
+  z.object({ type: z.literal('clearSlot'), clipId: IdSchema }),
 ]);
 
 export type Operation = z.input<typeof OperationSchema>;
@@ -256,6 +283,25 @@ function assertSourceRange(p: Project, clip: TimedMediaClip) {
     );
   }
 }
+
+/** Minimum spacing between two beat markers; closer taps are treated as the same beat. */
+export const MIN_BEAT_SPACING_US = 40_000;
+
+/** Sort, drop duplicates/near-duplicates and clamp beat markers to the media length. */
+export function normalizeBeats(beatsUs: readonly number[], durationUs: number): number[] {
+  const sorted = beatsUs
+    .filter((b) => Number.isFinite(b) && b >= 0 && b <= durationUs)
+    .map((b) => Math.round(b))
+    .sort((a, b) => a - b);
+  const out: number[] = [];
+  for (const b of sorted) {
+    const last = out[out.length - 1];
+    if (last === undefined || b - last >= MIN_BEAT_SPACING_US) out.push(b);
+  }
+  return out;
+}
+
+const fmtSeconds = (us: number) => `${(us / US_PER_SECOND).toFixed(1)} s`;
 
 function clampFades(clip: TimedMediaClip) {
   clip.audio.fadeIn = Math.min(clip.audio.fadeIn, clip.duration);
@@ -575,6 +621,119 @@ export function applyOperation(p: Project, op: ParsedOperation, ctx: Ctx): void 
       validateClipPlacement(p, clip);
       p.clips.push(clip);
       ctx.created.push(id);
+      return;
+    }
+
+    case 'setBeats': {
+      const c = getClip(p, op.clipId);
+      if (!isTimedMediaClip(c)) fail('UNSUPPORTED', `${c.kind} clips have no beat markers`);
+      const tc = c as TimedMediaClip;
+      const media =
+        p.media.find((m) => m.id === tc.mediaId) ?? fail('NOT_FOUND', 'Media not found');
+      tc.beatsUs = normalizeBeats(op.beatsUs, media.durationUs);
+      return;
+    }
+
+    case 'replaceClipMedia': {
+      const c = getClip(p, op.clipId);
+      if (c.kind !== 'slot' && c.kind !== 'video' && c.kind !== 'image')
+        fail('UNSUPPORTED', 'Only template slots, video and image clips can take new media');
+      const old = c as Extract<Clip, { kind: 'slot' | 'video' | 'image' }>;
+      assertUnlocked(getTrack(p, old.trackId));
+      const media =
+        p.media.find((m) => m.id === op.mediaId) ??
+        fail('NOT_FOUND', `Media ${op.mediaId} not found`);
+      if (media.kind === 'audio')
+        fail('VALIDATION', 'Template slots and video clips need a video or an image, not audio');
+      const slot = old.kind === 'slot' ? old.index : old.templateSlot;
+      const slotProp = slot !== undefined ? { templateSlot: slot } : {};
+      const transform = clone(old.transform);
+      let next: Clip;
+      if (media.kind === 'image') {
+        next = {
+          id: old.id,
+          kind: 'image',
+          trackId: old.trackId,
+          start: old.start,
+          duration: old.duration,
+          mediaId: media.id,
+          transform,
+          ...slotProp,
+        };
+      } else {
+        const speed = old.kind === 'video' ? old.speed : 1;
+        const need = framesToSourceUs(old.duration, p.sequence.fps, speed);
+        if (need > media.durationUs) {
+          const what = slot !== undefined ? 'slot' : 'clip';
+          fail(
+            'INVALID_RANGE',
+            `That video is ${fmtSeconds(media.durationUs)} long but this ${what} needs ` +
+              `${fmtSeconds(need)}. Pick a longer video, or shorten the ${what}.`,
+          );
+        }
+        const sourceInUs = Math.min(op.sourceInUs ?? 0, media.durationUs - need);
+        const video: Clip = {
+          id: old.id,
+          kind: 'video',
+          trackId: old.trackId,
+          start: old.start,
+          duration: old.duration,
+          mediaId: media.id,
+          sourceInUs,
+          speed,
+          transform,
+          audio: old.kind === 'video' ? clone(old.audio) : clone(DEFAULT_AUDIO),
+          beatsUs: [],
+          ...slotProp,
+        };
+        clampFades(video);
+        next = video;
+      }
+      p.clips[p.clips.indexOf(c)] = next;
+      validateClipPlacement(p, next);
+      return;
+    }
+
+    case 'slipClip': {
+      const c = getClip(p, op.clipId);
+      if (!isTimedMediaClip(c)) fail('UNSUPPORTED', `${c.kind} clips have no source to slip`);
+      const tc = c as TimedMediaClip;
+      assertUnlocked(getTrack(p, tc.trackId));
+      const media =
+        p.media.find((m) => m.id === tc.mediaId) ?? fail('NOT_FOUND', 'Media not found');
+      const max = media.durationUs - framesToSourceUs(tc.duration, p.sequence.fps, tc.speed);
+      if (op.sourceInUs > max) {
+        fail(
+          'INVALID_RANGE',
+          `The clip would run past the end of the media; the latest start is ${fmtSeconds(Math.max(0, max))}`,
+        );
+      }
+      tc.sourceInUs = op.sourceInUs;
+      return;
+    }
+
+    case 'clearSlot': {
+      const c = getClip(p, op.clipId);
+      if (c.kind !== 'video' && c.kind !== 'image')
+        fail('UNSUPPORTED', 'Only video and image clips can be turned back into a slot');
+      const vc = c as Extract<Clip, { kind: 'video' | 'image' }>;
+      assertUnlocked(getTrack(p, vc.trackId));
+      let maxIndex = 0;
+      for (const x of p.clips) {
+        if (x.kind === 'slot') maxIndex = Math.max(maxIndex, x.index);
+        else if ((x.kind === 'video' || x.kind === 'image') && x.templateSlot)
+          maxIndex = Math.max(maxIndex, x.templateSlot);
+      }
+      const slot: Clip = {
+        id: vc.id,
+        kind: 'slot',
+        trackId: vc.trackId,
+        start: vc.start,
+        duration: vc.duration,
+        index: vc.templateSlot ?? maxIndex + 1,
+        transform: clone(vc.transform),
+      };
+      p.clips[p.clips.indexOf(c)] = slot;
       return;
     }
   }

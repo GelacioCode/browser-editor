@@ -27,6 +27,9 @@ export function parseProjectDocument(json: string): Project {
       `This project was saved by a newer version of Viditor (schema ${String(version)}). Please update.`,
     );
   }
+  // v1 → v2: beat markers and template slots. New fields have schema defaults, so only the
+  // version number changes.
+  if (version === 1) doc = { ...(doc as object), schemaVersion: 2 };
   const result = ProjectSchema.safeParse(doc);
   if (!result.success) {
     const first = result.error.issues[0];

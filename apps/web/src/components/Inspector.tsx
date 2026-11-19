@@ -26,6 +26,7 @@ import {
   cx,
 } from '../ui/ui.tsx';
 import { SequenceSettings } from './SettingsDialog.tsx';
+import { BeatsSection, ClipWindowSection, FilledSlotSection, SlotSection } from './BeatTools.tsx';
 
 const pct = { to: (v: number) => v * 100, from: (v: number) => v / 100 };
 
@@ -404,7 +405,12 @@ function ClipInfo({ clip, project }: { clip: Clip; project: Project }) {
   return (
     <Section title="Clip">
       <div className="truncate text-sm">
-        {media?.name ?? (clip.kind === 'caption' ? 'Caption' : 'Text')}
+        {media?.name ??
+          (clip.kind === 'slot'
+            ? `Empty slot #${clip.index}`
+            : clip.kind === 'caption'
+              ? 'Caption'
+              : 'Text')}
       </div>
       <div className="grid grid-cols-2 gap-1 text-[11px] text-muted tabular-nums">
         <span>Start {frameToSeconds(clip.start, fps).toFixed(2)}s</span>
@@ -451,11 +457,22 @@ export function Inspector() {
   return (
     <div className="h-full overflow-y-auto" key={clip.id}>
       <ClipInfo clip={clip} project={project} />
+      {clip.kind === 'slot' && <SlotSection clip={clip} project={project} />}
+      {(clip.kind === 'video' || clip.kind === 'image') && (
+        <FilledSlotSection clip={clip} project={project} />
+      )}
+      {clip.kind === 'audio' && <BeatsSection clip={clip} project={project} />}
+      {(clip.kind === 'video' || clip.kind === 'audio') && (
+        <ClipWindowSection clip={clip} project={project} />
+      )}
       {(clip.kind === 'text' || clip.kind === 'caption') && <TextSection clip={clip} />}
-      {'transform' in clip && <TransformSection clip={clip} />}
+      {'transform' in clip && clip.kind !== 'slot' && <TransformSection clip={clip} />}
       {(clip.kind === 'video' || clip.kind === 'audio') && (
         <>
           <AudioSection clip={clip} project={project} />
+          {clip.kind === 'video' && findMedia(project, clip.mediaId)?.hasAudio && (
+            <BeatsSection clip={clip} project={project} />
+          )}
           <SpeedSection clip={clip} />
         </>
       )}

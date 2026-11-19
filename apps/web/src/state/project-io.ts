@@ -7,6 +7,8 @@ import {
   type Project,
 } from '@viditor/project-core';
 import {
+  type BeatAnalysis,
+  type BeatMode,
   MediaAnalyzer,
   UnsupportedMediaError,
   clearRecovery,
@@ -397,6 +399,14 @@ export async function relinkMedia(mediaId: string) {
 }
 
 /** mediaId → File for every media item that is currently available. */
+/** Local beat / bass-hit analysis of an imported file (cached; audio never leaves the tab). */
+export function analyzeBeats(mediaId: string, mode: BeatMode): Promise<BeatAnalysis> {
+  const rt = get().media[mediaId];
+  if (rt?.status !== 'ready' || !rt.file)
+    return Promise.reject(new Error('This media is offline. Relink it first.'));
+  return analyzer.detectBeats(rt.file, mode);
+}
+
 export function availableFiles(): Map<string, File> {
   const out = new Map<string, File>();
   for (const [id, m] of Object.entries(get().media))

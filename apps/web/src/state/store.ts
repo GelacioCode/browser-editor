@@ -47,6 +47,8 @@ export interface EditorState {
   playhead: number;
   playing: boolean;
   selection: string[];
+  /** A selected beat marker (source µs on a clip), for moving or deleting it. */
+  selectedBeat: { clipId: string; us: number } | null;
   /** Timeline zoom in pixels per second. */
   zoom: number;
   snapping: boolean;
@@ -74,6 +76,7 @@ export const useEditor = create<EditorState>(() => ({
   playhead: 0,
   playing: false,
   selection: [],
+  selectedBeat: null,
   zoom: 60,
   snapping: true,
   safeArea: false,
@@ -212,6 +215,7 @@ export function setPlayhead(frame: number) {
 
 export function select(ids: string[], additive = false) {
   set((s) => ({
+    selectedBeat: null,
     selection: additive
       ? [
           ...new Set([

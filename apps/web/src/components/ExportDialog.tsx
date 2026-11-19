@@ -1,6 +1,11 @@
 import { useEffect, useRef, useState } from 'react';
 import { CheckCircle2, AlertCircle } from 'lucide-react';
-import { frameToSeconds, sequenceDuration, type ExportSettings } from '@viditor/project-core';
+import {
+  frameToSeconds,
+  sequenceDuration,
+  templateSlots,
+  type ExportSettings,
+} from '@viditor/project-core';
 import {
   checkEncoders,
   exportDimensions,
@@ -46,6 +51,7 @@ export function ExportDialog({ onClose }: { onClose: () => void }) {
   const duration = frameToSeconds(sequenceDuration(project), project.sequence.fps);
   const running = progress && !['done', 'canceled', 'error'].includes(progress.phase);
   const missing = missingMedia(project, availableFiles());
+  const emptySlots = templateSlots(project).length;
 
   useEffect(() => {
     void checkEncoders(width, height).then(setSupport);
@@ -168,6 +174,13 @@ export function ExportDialog({ onClose }: { onClose: () => void }) {
           <p className="flex gap-1.5 rounded-md bg-warning/10 p-2 text-xs text-warning">
             <AlertCircle size={14} className="shrink-0" /> AAC audio encoding isn't available here,
             so projects with audio can't be exported in this browser.
+          </p>
+        )}
+        {emptySlots > 0 && (
+          <p className="flex gap-1.5 rounded-md bg-warning/10 p-2 text-xs text-warning">
+            <AlertCircle size={14} className="shrink-0" /> {emptySlots} template slot
+            {emptySlots > 1 ? 's are' : ' is'} still empty. Empty slots show whatever is below them
+            (black if nothing).
           </p>
         )}
         {missing.length > 0 && (

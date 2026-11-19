@@ -14,6 +14,7 @@ const clip: VideoClip = {
   speed: 1,
   transform: DEFAULT_TRANSFORM,
   audio: { ...DEFAULT_AUDIO, gain: 0.5, fadeIn: 10, fadeOut: 20 },
+  beatsUs: [],
 };
 
 describe('audio envelope', () => {

@@ -54,7 +54,7 @@ export const DEFAULT_CAPTION_TRANSFORM: Transform = { ...DEFAULT_TRANSFORM, y: 0
 
 /** Which clip kinds may live on which track kinds. */
 export const TRACK_ACCEPTS: Record<TrackKind, readonly ClipKind[]> = {
-  video: ['video', 'image'],
+  video: ['video', 'image', 'slot'],
   audio: ['audio'],
   text: ['text'],
   caption: ['caption'],
@@ -64,6 +64,7 @@ export function trackKindForClip(kind: ClipKind): TrackKind {
   switch (kind) {
     case 'video':
     case 'image':
+    case 'slot':
       return 'video';
     case 'audio':
       return 'audio';

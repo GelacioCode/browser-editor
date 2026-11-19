@@ -1,5 +1,10 @@
 import type { Rational } from './time.ts';
-import { framesToSourceUs, sourceUsToFrames } from './time.ts';
+import {
+  framesToSourceUs,
+  secondsToNearestFrame,
+  sourceUsToFrames,
+  US_PER_SECOND,
+} from './time.ts';
 import type {
   Clip,
   MediaItem,
@@ -24,8 +29,9 @@ export function isTextLike(clip: Clip): clip is TextLikeClip {
   return clip.kind === 'text' || clip.kind === 'caption';
 }
 
+/** Clips that draw pixels. Empty template slots are transparent, so they are not visual. */
 export function isVisual(clip: Clip): clip is VisualClip {
-  return clip.kind !== 'audio';
+  return clip.kind !== 'audio' && clip.kind !== 'slot';
 }
 
 export function hasMedia(clip: Clip): clip is Extract<Clip, { mediaId: string }> {
@@ -126,7 +132,58 @@ export function audibleClips(project: Project): TimedMediaClip[] {
     });
 }
 
-/** All snap candidates (clip edges) on the timeline, excluding given clip ids. */
+/** Timeline frame (nearest) where source time `us` of a timed clip plays. */
+export function sourceUsToTimelineFrame(clip: TimedMediaClip, us: number, fps: Rational): number {
+  return (
+    clip.start + secondsToNearestFrame((us - clip.sourceInUs) / US_PER_SECOND / clip.speed, fps)
+  );
+}
+
+/** Beat markers of a clip that fall inside its visible range, as timeline frames (ascending). */
+export function beatFrames(clip: Clip, fps: Rational): number[] {
+  if (!isTimedMediaClip(clip) || clip.beatsUs.length === 0) return [];
+  const out: number[] = [];
+  const end = clipEnd(clip);
+  for (const us of clip.beatsUs) {
+    if (us < clip.sourceInUs) continue;
+    const f = sourceUsToTimelineFrame(clip, us, fps);
+    if (f >= end) break;
+    if (out[out.length - 1] !== f) out.push(f);
+  }
+  return out;
+}
+
+/** All beat markers on the timeline (from every clip that has them), ascending, unique. */
+export function allBeatFrames(project: Project, ignoreIds: readonly string[] = []): number[] {
+  const pts = new Set<number>();
+  for (const c of project.clips) {
+    if (ignoreIds.includes(c.id)) continue;
+    for (const f of beatFrames(c, project.sequence.fps)) pts.add(f);
+  }
+  return [...pts].sort((a, b) => a - b);
+}
+
+/**
+ * Valid source in-points for slipping a timed clip: the visible duration stays fixed, so the
+ * in-point can move from 0 to (media length − clip length).
+ */
+export function slipRangeUs(
+  clip: TimedMediaClip,
+  media: MediaItem,
+  fps: Rational,
+): { min: number; max: number } {
+  const span = framesToSourceUs(clip.duration, fps, clip.speed);
+  return { min: 0, max: Math.max(0, media.durationUs - span) };
+}
+
+/** Empty template slots, in slot order. */
+export function templateSlots(project: Project): Extract<Clip, { kind: 'slot' }>[] {
+  return project.clips
+    .filter((c): c is Extract<Clip, { kind: 'slot' }> => c.kind === 'slot')
+    .sort((a, b) => a.start - b.start || a.index - b.index);
+}
+
+/** All snap candidates (clip edges and beat markers), excluding given clip ids. */
 export function snapPoints(project: Project, ignoreIds: readonly string[] = []): number[] {
   const pts = new Set<number>([0]);
   for (const c of project.clips) {
@@ -134,5 +191,6 @@ export function snapPoints(project: Project, ignoreIds: readonly string[] = []):
     pts.add(c.start);
     pts.add(clipEnd(c));
   }
+  for (const f of allBeatFrames(project, ignoreIds)) pts.add(f);
   return [...pts].sort((a, b) => a - b);
 }

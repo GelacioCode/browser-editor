@@ -22,6 +22,8 @@
   --color-success: var(--vd-success);
   --color-playhead: var(--vd-playhead);
   --color-snap: var(--vd-snap);
+  --color-beat: var(--vd-beat);
+  --color-beat-guide: var(--vd-beat-guide);
   --radius-sm: var(--vd-radius-sm);
   --radius-md: var(--vd-radius);
   --radius-lg: var(--vd-radius-lg);

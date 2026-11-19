@@ -2,16 +2,20 @@ import { z } from 'zod';
 import { FONTS } from '@viditor/composition';
 import {
   DEFAULT_TITLE_STYLE,
+  beatFrames,
   clipsAt,
   dbToGain,
   frameToSeconds,
+  isTimedMediaClip,
   secondsToNearestFrame,
+  secondsToUs,
   type Operation,
   type Project,
   type ProjectEngine,
   type TextStyle,
 } from './deps.ts';
 import { TITLE_PRESETS, planAddMedia } from './planning.ts';
+import { planBeatTemplate, planFillSlots, sequenceOpsForFirstFill } from './templates.ts';
 import type { ToolOutcome } from './protocol.ts';
 import { clipView, projectView } from './views.ts';
 
@@ -23,12 +27,22 @@ import { clipView, projectView } from './views.ts';
  * Deliberately absent: file access, imports and export. Those need the user's own file pickers.
  */
 
+export interface BeatDetection {
+  bpm: number | null;
+  /** Marker positions in source microseconds of the media. */
+  beatsUs: number[];
+}
+
 export interface ToolContext {
   engine: ProjectEngine;
   getPlayhead(): number;
   setPlayhead(frame: number): void;
   select(clipIds: string[]): void;
+  /** Local beat analysis of a media file (runs in the editor; audio never leaves the tab). */
+  detectBeats?(mediaId: string, mode: 'beat' | 'bass'): Promise<BeatDetection>;
 }
+
+type MaybePromise<T> = T | Promise<T>;
 
 export interface ToolDef<S extends z.ZodRawShape = z.ZodRawShape> {
   name: string;
@@ -38,7 +52,7 @@ export interface ToolDef<S extends z.ZodRawShape = z.ZodRawShape> {
   /** True if the tool never changes the project. */
   readOnly: boolean;
   destructive?: boolean;
-  run(args: z.output<z.ZodObject<S>>, ctx: ToolContext): ToolOutcome;
+  run(args: z.output<z.ZodObject<S>>, ctx: ToolContext): MaybePromise<ToolOutcome>;
 }
 
 function defineTool<S extends z.ZodRawShape>(def: ToolDef<S>): ToolDef<S> {
@@ -143,6 +157,19 @@ function commit(
 function clipOr404(project: Project, clipId: string) {
   return project.clips.find((c) => c.id === clipId);
 }
+
+const r3 = (n: number) => Math.round(n * 1000) / 1000;
+
+/** Beat markers of a clip as timeline seconds (visible range only). */
+function beatSeconds(project: Project, clipId: string): number[] {
+  const c = clipOr404(project, clipId);
+  if (!c) return [];
+  return beatFrames(c, project.sequence.fps).map((f) =>
+    r3(frameToSeconds(f, project.sequence.fps)),
+  );
+}
+
+const MAX_LISTED_BEATS = 400;
 
 /* -------------------------------------------------------------------------------------------- */
 /* Tools                                                                                         */
@@ -608,10 +635,228 @@ export const TOOLS = [
   }),
 
   defineTool({
+    name: 'detect_beats',
+    title: 'Detect beats in music',
+    description:
+      'Analyse the music of an audio or video clip locally in the editor and place beat markers on it (replacing existing ones). mode "beat" finds the steady pulse; "bass" finds kick/bass hits, including off-beat ones. Returns the tempo and the marker times on the timeline. Follow with create_beat_template to cut a template on the beats.',
+    shape: {
+      clipId: id('Audio or video clip holding the music'),
+      mode: z.enum(['beat', 'bass']).optional().describe('Default "beat"'),
+      ...editGuards,
+    },
+    readOnly: false,
+    async run(args, ctx) {
+      const p = ctx.engine.project;
+      const clip = clipOr404(p, args.clipId);
+      if (!clip) return fail('NOT_FOUND', `Clip ${args.clipId} not found`);
+      if (!isTimedMediaClip(clip))
+        return fail('UNSUPPORTED', 'Beats can only be detected on audio or video clips');
+      if (!ctx.detectBeats) return fail('UNSUPPORTED', 'Beat detection is not available here');
+      let r: BeatDetection;
+      try {
+        r = await ctx.detectBeats(clip.mediaId, args.mode ?? 'beat');
+      } catch (e) {
+        return fail('ANALYSIS_FAILED', e instanceof Error ? e.message : String(e));
+      }
+      const out = commit(
+        ctx,
+        args,
+        [{ type: 'setBeats', clipId: clip.id, beatsUs: r.beatsUs }],
+        `Detect ${args.mode ?? 'beat'} markers`,
+      );
+      if (!out.ok) return out;
+      const times = beatSeconds(ctx.engine.project, clip.id);
+      return {
+        ...out,
+        message: `${times.length} ${args.mode === 'bass' ? 'bass hits' : 'beats'} marked${r.bpm ? ` (~${r.bpm} BPM)` : ''}`,
+        data: {
+          bpm: r.bpm,
+          markerCount: times.length,
+          markerSeconds: times.slice(0, MAX_LISTED_BEATS),
+          truncated: times.length > MAX_LISTED_BEATS,
+        },
+      };
+    },
+  }),
+
+  defineTool({
+    name: 'get_beats',
+    title: 'List beat markers',
+    description:
+      'Beat markers of a clip, as timeline seconds (only those inside the visible clip).',
+    shape: { clipId: id('Clip ID') },
+    readOnly: true,
+    run(args, ctx) {
+      const p = ctx.engine.project;
+      if (!clipOr404(p, args.clipId)) return fail('NOT_FOUND', `Clip ${args.clipId} not found`);
+      const times = beatSeconds(p, args.clipId);
+      return {
+        ok: true,
+        message: `${times.length} beat markers`,
+        revision: p.revision,
+        data: {
+          markerSeconds: times.slice(0, MAX_LISTED_BEATS),
+          truncated: times.length > MAX_LISTED_BEATS,
+        },
+      };
+    },
+  }),
+
+  defineTool({
+    name: 'set_beats',
+    title: 'Set beat markers',
+    description:
+      'Replace the beat markers of an audio or video clip with these timeline times (seconds). Markers stay attached to the music if the clip is moved or trimmed.',
+    shape: {
+      clipId: id('Audio or video clip ID'),
+      markerSeconds: z.array(seconds('Marker time on the timeline')).max(20_000),
+      ...editGuards,
+    },
+    readOnly: false,
+    run(args, ctx) {
+      const p = ctx.engine.project;
+      const clip = clipOr404(p, args.clipId);
+      if (!clip) return fail('NOT_FOUND', `Clip ${args.clipId} not found`);
+      if (!isTimedMediaClip(clip))
+        return fail('UNSUPPORTED', 'Only audio and video clips have beat markers');
+      const startS = frameToSeconds(clip.start, p.sequence.fps);
+      const beatsUs = args.markerSeconds
+        .map((s) => clip.sourceInUs + secondsToUs((s - startS) * clip.speed))
+        .filter((us) => us >= 0);
+      return commit(
+        ctx,
+        args,
+        [{ type: 'setBeats', clipId: clip.id, beatsUs }],
+        `Set ${beatsUs.length} beat markers`,
+      );
+    },
+  }),
+
+  defineTool({
+    name: 'create_beat_template',
+    title: 'Create a beat template',
+    description:
+      'Cut a template on the beat markers of a music clip: a new "Template" video track (above the other video) with numbered empty slots whose edges sit exactly on every Nth beat. Then fill the slots with fill_slots; each video plays for exactly its slot, so cuts land on the beat.',
+    shape: {
+      clipId: id('The music clip (with beat markers)'),
+      everyNBeats: z
+        .number()
+        .int()
+        .min(1)
+        .max(64)
+        .optional()
+        .describe('Cut every N beats (default 1)'),
+      fromSeconds: seconds('Template start (default: start of the music clip)').optional(),
+      toSeconds: seconds('Template end (default: end of the music clip)').optional(),
+      ...editGuards,
+    },
+    readOnly: false,
+    run(args, ctx) {
+      const p = ctx.engine.project;
+      const plan = planBeatTemplate(p, {
+        clipId: args.clipId,
+        every: args.everyNBeats,
+        fromFrame: args.fromSeconds !== undefined ? frames(p, args.fromSeconds) : undefined,
+        toFrame: args.toSeconds !== undefined ? frames(p, args.toSeconds) : undefined,
+      });
+      if ('error' in plan) return fail(plan.code, plan.error);
+      const fps = p.sequence.fps;
+      const out = commit(
+        ctx,
+        args,
+        plan.ops,
+        `Create beat template (${plan.slotIds.length} slots)`,
+        {
+          trackId: plan.trackId,
+          slots: plan.slotIds.map((slotId, i) => ({
+            slotId,
+            number: i + 1,
+            startSeconds: r3(frameToSeconds(plan.boundaries[i]!, fps)),
+            durationSeconds: r3(frameToSeconds(plan.boundaries[i + 1]! - plan.boundaries[i]!, fps)),
+          })),
+        },
+      );
+      if (out.ok) ctx.select([]);
+      return out;
+    },
+  }),
+
+  defineTool({
+    name: 'fill_slots',
+    title: 'Fill template slots',
+    description:
+      'Put videos or images into empty template slots. Either give explicit fills (slot clip ID + mediaId, optionally where in the video to start), or autoFillWith a list of mediaIds to fill every empty slot in order, cycling through the list (repeated videos continue from where they left off). Videos shorter than a slot are skipped for that slot. One undo step.',
+    shape: {
+      fills: z
+        .array(
+          z.object({
+            slotId: id('Slot clip ID (or a filled template clip, to swap it)'),
+            mediaId: id('Video or image media ID'),
+            sourceInSeconds: seconds('Where in the video this slot starts').optional(),
+          }),
+        )
+        .max(1000)
+        .optional(),
+      autoFillWith: z.array(id('Media ID')).max(200).optional(),
+      ...editGuards,
+    },
+    readOnly: false,
+    run(args, ctx) {
+      const p = ctx.engine.project;
+      if (args.fills?.length) {
+        return commit(
+          ctx,
+          args,
+          [
+            ...sequenceOpsForFirstFill(p, args.fills[0]!.mediaId),
+            ...args.fills.map((f) => ({
+              type: 'replaceClipMedia' as const,
+              clipId: f.slotId,
+              mediaId: f.mediaId,
+              sourceInUs:
+                f.sourceInSeconds !== undefined ? secondsToUs(f.sourceInSeconds) : undefined,
+            })),
+          ],
+          `Fill ${args.fills.length} slot${args.fills.length > 1 ? 's' : ''}`,
+        );
+      }
+      if (!args.autoFillWith?.length) return fail('VALIDATION', 'Give fills or autoFillWith');
+      const plan = planFillSlots(p, args.autoFillWith);
+      if ('error' in plan) return fail(plan.code, plan.error);
+      if (!plan.ops.length)
+        return fail('INVALID_RANGE', 'Every video is shorter than the slots it would fill');
+      return commit(ctx, args, plan.ops, `Fill ${plan.filled.length} slots`, {
+        skippedSlots: plan.skipped,
+      });
+    },
+  }),
+
+  defineTool({
+    name: 'slip_clip',
+    title: 'Choose which part of a video shows',
+    description:
+      'Change which part of the source a video/audio clip plays without moving or resizing it on the timeline (a slip edit). Ideal for template slots: the cut stays on the beat while a different moment of the video shows.',
+    shape: {
+      clipId: id('Video or audio clip ID'),
+      sourceInSeconds: seconds('Where in the source the clip should start'),
+      ...editGuards,
+    },
+    readOnly: false,
+    run(args, ctx) {
+      return commit(
+        ctx,
+        args,
+        [{ type: 'slipClip', clipId: args.clipId, sourceInUs: secondsToUs(args.sourceInSeconds) }],
+        `Show from ${args.sourceInSeconds}s of the source`,
+      );
+    },
+  }),
+
+  defineTool({
     name: 'apply_operations',
     title: 'Apply raw engine operations (advanced)',
     description:
-      'Apply a batch of low-level Viditor engine operations atomically: all succeed or none do, and the batch is one undo step. Units are FRAMES at the sequence frame rate (see get_project), and source times are microseconds. Prefer the specific tools; use this for multi-step edits that must be atomic. Operation types: renameProject, setSequence, addTrack, updateTrack, moveTrack, removeTrack, addClip, deleteClip, moveClip, splitClip, trimClip, duplicateClip, setTransform, setAudio, setSpeed, addTitle, updateText, addCaption.',
+      'Apply a batch of low-level Viditor engine operations atomically: all succeed or none do, and the batch is one undo step. Units are FRAMES at the sequence frame rate (see get_project), and source times are microseconds. Prefer the specific tools; use this for multi-step edits that must be atomic. Operation types: renameProject, setSequence, addTrack, updateTrack, moveTrack, removeTrack, addClip, deleteClip, moveClip, splitClip, trimClip, duplicateClip, setTransform, setAudio, setSpeed, addTitle, updateText, addCaption, setBeats, replaceClipMedia, slipClip, clearSlot.',
     shape: {
       operations: z.array(z.record(z.string(), z.unknown())).min(1).max(500),
       label: z.string().max(80).optional().describe('Short description shown in the undo history'),
@@ -700,8 +945,15 @@ export function getTool(name: string): ToolDef<z.ZodRawShape> | undefined {
   return BY_NAME.get(name);
 }
 
-/** Validate and execute a tool call inside the editor. Never throws. */
-export function runTool(name: string, rawArgs: unknown, ctx: ToolContext): ToolOutcome {
+/**
+ * Validate and execute a tool call inside the editor. Never throws (a returned promise never
+ * rejects). Only tools that need local analysis (detect_beats) are asynchronous.
+ */
+export function runTool(
+  name: string,
+  rawArgs: unknown,
+  ctx: ToolContext,
+): MaybePromise<ToolOutcome> {
   const def = BY_NAME.get(name);
   if (!def) return fail('UNKNOWN_TOOL', `Unknown tool ${name}`);
   const parsed = z.object(def.shape).safeParse(rawArgs ?? {});
@@ -712,10 +964,12 @@ export function runTool(name: string, rawArgs: unknown, ctx: ToolContext): ToolO
       parsed.error.issues.map((i) => ({ path: i.path.join('.'), message: i.message })),
     );
   }
+  const internal = (e: unknown) => fail('INTERNAL', e instanceof Error ? e.message : String(e));
   try {
-    return def.run(parsed.data, ctx);
+    const out = def.run(parsed.data, ctx);
+    return out instanceof Promise ? out.catch(internal) : out;
   } catch (e) {
-    return fail('INTERNAL', e instanceof Error ? e.message : String(e));
+    return internal(e);
   }
 }
 
@@ -724,4 +978,5 @@ export const SERVER_INSTRUCTIONS = `Viditor is a video editor running in the use
 - Every edit is validated, applied atomically and appears in the user's timeline immediately; each tool call is one undo step (undo tool, or Ctrl+Z in the editor).
 - Pass expectedRevision from your last read when an edit depends on what you read; on STALE_REVISION, re-read and retry.
 - You can only see metadata (IDs, timing, generic media labels), not the footage itself. File names and title text are hidden unless the user enabled sharing in the editor's AI panel.
-- Importing files and exporting video are done by the user in the editor.`;
+- Importing files and exporting video are done by the user in the editor.
+- Beat-sync editing: detect_beats on the music clip, create_beat_template, then fill_slots; slip_clip picks which moment of a video shows in its slot without moving the cut.`;

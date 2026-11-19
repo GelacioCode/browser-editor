@@ -1,4 +1,5 @@
 import type { AnalysisResult } from './analysis-types.ts';
+import type { BeatAnalysis, BeatMode } from './beats.ts';
 
 /**
  * Disposable analysis cache (thumbnails, waveforms) in the Origin Private File System.
@@ -107,6 +108,24 @@ export async function putCachedAnalysis(
   };
   await writeFile(dir, 'meta.json', JSON.stringify(meta));
   await evictToCap(capBytes);
+}
+
+/** Beat analysis is tiny JSON stored next to the thumbnails of the same file. */
+export async function getCachedBeats(key: string, mode: BeatMode): Promise<BeatAnalysis | null> {
+  try {
+    const dir = await (await root()).getDirectoryHandle(key);
+    const r = JSON.parse(
+      await (await readFile(dir, 'beats-' + mode + '.json')).text(),
+    ) as BeatAnalysis;
+    return Array.isArray(r.beatsUs) ? r : null;
+  } catch {
+    return null;
+  }
+}
+
+export async function putCachedBeats(key: string, mode: BeatMode, r: BeatAnalysis) {
+  const dir = await (await root()).getDirectoryHandle(key, { create: true });
+  await writeFile(dir, 'beats-' + mode + '.json', JSON.stringify(r));
 }
 
 export interface CacheUsage {

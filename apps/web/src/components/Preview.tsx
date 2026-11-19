@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { Play, Pause, SkipBack, SkipForward, ChevronLeft, ChevronRight, Frame } from 'lucide-react';
 import {
+  clipEnd,
   findMedia,
   formatTimecode,
   sequenceDuration,
@@ -135,6 +136,14 @@ export function Preview() {
   const selectedLayer = layers.find((c) => selection.includes(c.id));
   const selBox = selectedLayer ? layerBox(project, selectedLayer) : null;
   const locked = (clip: VisualClip) => project.tracks.find((t) => t.id === clip.trackId)?.locked;
+  const hiddenTracks = new Set(project.tracks.filter((t) => t.hidden).map((t) => t.id));
+  const emptySlot = project.clips.find(
+    (c) =>
+      c.kind === 'slot' &&
+      !hiddenTracks.has(c.trackId) &&
+      playhead >= c.start &&
+      playhead < clipEnd(c),
+  );
 
   const toSeq = (e: React.PointerEvent) => {
     const r = canvasRef.current!.getBoundingClientRect();
@@ -249,6 +258,13 @@ export function Preview() {
                 className="absolute border border-dashed border-white/25"
                 style={{ inset: '10%' }}
               />
+            </div>
+          )}
+          {emptySlot?.kind === 'slot' && (
+            <div className="pointer-events-none absolute inset-0 border-2 border-dashed border-white/30">
+              <div className="absolute bottom-2 left-2 rounded bg-black/70 px-2 py-1 text-[11px] text-white">
+                Empty slot #{emptySlot.index} · drag a clip onto it in the timeline
+              </div>
             </div>
           )}
           {snapGuide.x && (

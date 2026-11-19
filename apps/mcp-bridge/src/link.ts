@@ -99,7 +99,7 @@ export class TabLink {
       const timer = setTimeout(() => {
         this.pending.delete(callId);
         resolve({ ok: false, errorCode: 'TIMEOUT', message: 'The editor did not respond in time' });
-      }, this.opts.callTimeoutMs ?? 30_000);
+      }, this.opts.callTimeoutMs ?? 120_000);
       this.pending.set(callId, { resolve, timer });
       s.events!.write(`event: call\ndata: ${JSON.stringify(msg)}\n\n`);
     });

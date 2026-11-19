@@ -55,6 +55,15 @@ writers are always detected.
   (e.g. `30000/1001`).
 - Source positions are **integer microseconds**, the WebCodecs time base.
 - Conversions live in `packages/project-core/src/time.ts` and are unit-tested for NTSC round-trips.
+- Beat markers (`beatsUs` on video/audio clips, schema v2) are stored in **source microseconds**
+  of the clip's media, for the whole media. Moving, trimming or splitting a clip therefore keeps
+  them on the music; the timeline frame of a marker is derived (`beatFrames`).
+- A beat template is a video track of `slot` clips (empty placeholders, transparent when
+  rendered). `replaceClipMedia` turns a slot into a video/image clip with the same start and
+  duration and remembers the slot number; `slipClip` changes only the source in-point.
+  Template planning (`planBeatTemplate`, `planFillSlots`) lives in `packages/contracts` so the UI
+  and the assistant tools share it. Beat detection is pure DSP in `packages/media/src/beats.ts`,
+  run in the analysis worker and cached per file and mode.
 
 ### Preview/export parity
 
