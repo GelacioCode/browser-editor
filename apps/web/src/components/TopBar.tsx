@@ -16,6 +16,8 @@ import { apply, openDialog, redo, undo, useEditor } from '../state/store.ts';
 import { closeProject, saveNow } from '../state/project-io.ts';
 import { Button, IconButton } from '../ui/ui.tsx';
 import { Logo } from './Logo.tsx';
+import { StatusDot } from './AssistantPanel.tsx';
+import { useAssistant } from '../state/assistant.ts';
 
 function SaveIndicator() {
   const state = useEditor((s) => s.saveState);
@@ -69,6 +71,20 @@ function ProjectName() {
   );
 }
 
+function AssistantPill() {
+  const status = useAssistant((s) => s.status);
+  return (
+    <button
+      onClick={() => useEditor.setState({ leftTab: 'ai' })}
+      title="AI assistant connection"
+      className="flex items-center gap-1.5 rounded-md px-2 py-1 text-[11px] text-muted hover:bg-surface-3 hover:text-text"
+    >
+      <StatusDot status={status} />
+      {status === 'connected' ? 'AI connected' : 'AI'}
+    </button>
+  );
+}
+
 export function TopBar() {
   const canUndo = useEditor((s) => s.canUndo);
   const canRedo = useEditor((s) => s.canRedo);
@@ -101,6 +117,7 @@ export function TopBar() {
 
       <div className="flex-1" />
 
+      <AssistantPill />
       {seq && (
         <button
           onClick={() => openDialog('settings')}

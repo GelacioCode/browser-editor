@@ -10,14 +10,20 @@ Viditor runs entirely in your browser.
   cleared from **Settings → Cache**.
 - The browser remembers which files and folders you granted access to (IndexedDB) so projects can
   reopen. Removing a project from "Recent projects" or clearing site data removes these.
-- The site sets a strict Content-Security-Policy (`connect-src 'self'`), so the page can't send data
+- The site sets a strict Content-Security-Policy: the page can only connect to its own origin and
+  to your own computer's loopback address (for the optional assistant bridge), so it can't send data
   to third-party servers. No analytics, fonts or scripts are loaded from other domains.
 - Once loaded, manual editing and export work offline.
 
-## Future AI assistant (MCP) sharing
+## AI assistant (MCP)
 
-When assistant support is added, it will default to sharing nothing beyond the minimal timeline
-structure the assistant needs to make edits, with generic media labels and no file names or paths.
-Sharing file names, title/caption text, frames, audio or transcripts will each need a separate,
-visible opt-in in the project's privacy settings (`privacySettings` in `project.json`, all `false`
-by default).
+The assistant connection is off until you click **Connect** in the AI panel. Even then, the editor
+talks only to the `viditor-mcp` bridge on your own computer (127.0.0.1). The assistant then sees:
+
+- **Always:** timeline structure and timings, track layout, resolution, frame rate, and generic media
+  labels ("Video 1"). This goes to your assistant's provider as part of the conversation.
+- **Only if you switch it on (per project):** original file names; title and caption text.
+- **Never:** footage, audio, frames, thumbnails, transcripts or file paths.
+
+Every assistant action is listed in the AI panel's activity log and can be undone. Details:
+[assistant.md](assistant.md).

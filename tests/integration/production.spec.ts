@@ -13,7 +13,16 @@ test('production build runs under the production CSP without violations', async 
   });
   const errors: string[] = [];
   page.on('pageerror', (e) => errors.push(e.message));
-  page.on('console', (m) => m.type() === 'error' && errors.push(m.text()));
+  page.on('console', (m) => {
+    // The deliberate probes below log network errors; only count other console errors.
+    if (
+      m.type() === 'error' &&
+      !/127\.0\.0\.1:47998|example\.com|Content Security Policy|Failed to fetch|ERR_CONNECTION_REFUSED/.test(
+        m.text(),
+      )
+    )
+      errors.push(m.text());
+  });
 
   const res = await page.goto(PROD);
   expect(res?.headers()['content-security-policy']).toContain("default-src 'self'");
@@ -26,7 +35,17 @@ test('production build runs under the production CSP without violations', async 
   });
   expect(fontsOk).toBe(true);
 
+  // The assistant bridge on the user's own loopback is allowed (connection refused here is fine)…
+  await page.evaluate(() =>
+    fetch('http://127.0.0.1:47998/connect', { method: 'POST' }).catch(() => null),
+  );
   const violations = await page.evaluate(() => (window as unknown as { __csp: string[] }).__csp);
   expect(violations).toEqual([]);
+
+  // …but any other destination is still blocked by the policy.
+  await page.evaluate(() => fetch('https://example.com/').catch(() => null));
+  await expect
+    .poll(() => page.evaluate(() => (window as unknown as { __csp: string[] }).__csp.length))
+    .toBe(1);
   expect(errors).toEqual([]);
 });

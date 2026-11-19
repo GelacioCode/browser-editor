@@ -1,128 +1,52 @@
 import {
-  COMMON_FRAME_RATES,
   DEFAULT_TITLE_STYLE,
-  TRACK_ACCEPTS,
   clipEnd,
   clipsAt,
   cueToFrames,
   findMedia,
-  findOverlap,
   formatSrt,
   framesToCue,
-  fpsToNumber,
-  maxFramesFrom,
   newId,
   parseSrt,
   secondsToNearestFrame,
-  trackKindForClip,
-  type ClipKind,
   type Operation,
   type Project,
-  type TextStyle,
-  type Transform,
 } from '@viditor/project-core';
+import { TITLE_PRESETS, planAddMedia, type TitlePreset } from '@viditor/contracts';
 import { apply, select, setPlayhead, toast, useEditor } from './store.ts';
+
+export { TITLE_PRESETS, type TitlePreset };
 
 const get = useEditor.getState;
 
-function nearestFps(avg: number | null) {
-  if (!avg) return null;
-  let best = COMMON_FRAME_RATES[0]!;
-  for (const r of COMMON_FRAME_RATES) {
-    if (Math.abs(fpsToNumber(r.fps) - avg) < Math.abs(fpsToNumber(best.fps) - avg)) best = r;
-  }
-  // 59.94 / 23.976 are common on phones and cameras too.
-  if (Math.abs(avg - 59.94) < 0.05) return { num: 60000, den: 1001 };
-  if (Math.abs(avg - 23.976) < 0.05) return { num: 24000, den: 1001 };
-  return Math.abs(fpsToNumber(best.fps) - avg) < 0.6 ? best.fps : null;
-}
-
 /**
- * Place a media item on the timeline. If no `trackId` is given, uses the first compatible track
- * with room, or creates a new one. The first video placed on an empty timeline sets the sequence
- * format (resolution + frame rate) to match it.
+ * Place a media item on the timeline (same planning as the assistant's add_media_to_timeline):
+ * first compatible track with room, or a new one; the first video on an empty timeline sets the
+ * sequence format to match it.
  */
 export function addMediaToTimeline(mediaId: string, at?: number, trackId?: string): string | null {
   const project = get().project;
   if (!project) return null;
   const media = findMedia(project, mediaId);
   if (!media) return null;
-  const rt = get().media[mediaId];
-  if (rt?.status !== 'ready') {
+  if (get().media[mediaId]?.status !== 'ready') {
     toast('This media is offline. Relink it first.', 'error');
     return null;
   }
-  const ops: Operation[] = [];
-  let fps = project.sequence.fps;
-
-  if (project.clips.length === 0 && media.kind === 'video' && media.width > 0) {
-    const scale = Math.min(1, 2160 / Math.max(media.width, media.height));
-    const w = Math.round((media.width * scale) / 2) * 2;
-    const h = Math.round((media.height * scale) / 2) * 2;
-    const nf = nearestFps(media.fps) ?? fps;
-    if (
-      w !== project.sequence.width ||
-      h !== project.sequence.height ||
-      nf.num !== fps.num ||
-      nf.den !== fps.den
-    ) {
-      ops.push({ type: 'setSequence', width: w, height: h, fps: nf });
-      ops.push({ type: 'setExportSettings', settings: { height: Math.min(h, 1080) } });
-      fps = nf;
-      toast(
-        `Sequence set to ${w}×${h} @ ${fpsToNumber(nf).toFixed(2).replace(/\.00$/, '')} fps to match the first clip`,
-      );
-    }
-  }
-
-  const kind: ClipKind = media.kind;
-  const duration =
-    media.kind === 'image'
-      ? secondsToNearestFrame(5, fps)
-      : Math.max(1, maxFramesFrom(media, 0, fps, 1));
-  const start = Math.max(0, at ?? get().playhead);
-
-  let targetTrack = trackId;
-  if (targetTrack) {
-    const t = project.tracks.find((x) => x.id === targetTrack);
-    if (!t || !TRACK_ACCEPTS[t.kind].includes(kind)) {
-      toast(`A ${media.kind} can't go on that track`, 'error');
-      return null;
-    }
-  } else {
-    const wanted = trackKindForClip(kind);
-    targetTrack = project.tracks.find(
-      (t) => t.kind === wanted && !t.locked && !findOverlap(project, t.id, start, duration),
-    )?.id;
-    if (!targetTrack) {
-      targetTrack = newId('t');
-      // New audio tracks go at the bottom; new video tracks go above existing video (overlay).
-      const firstOf = (k: string) => project.tracks.findIndex((t) => t.kind === k);
-      let index = project.tracks.length;
-      if (wanted === 'video') {
-        index = firstOf('video');
-        if (index === -1) index = firstOf('audio');
-        if (index === -1) index = project.tracks.length;
-      }
-      ops.push({ type: 'addTrack', kind: wanted, id: targetTrack, index });
-    }
-  }
-
-  const clipId = newId('c');
-  const base = { id: clipId, trackId: targetTrack, mediaId, start, duration };
-  ops.push({
-    type: 'addClip',
-    clip:
-      kind === 'video'
-        ? { ...base, kind: 'video' }
-        : kind === 'audio'
-          ? { ...base, kind: 'audio' }
-          : { ...base, kind: 'image' },
+  const plan = planAddMedia(project, {
+    mediaId,
+    start: Math.max(0, at ?? get().playhead),
+    trackId,
   });
-  const r = apply(ops, { label: `Add ${media.name}` });
+  if ('error' in plan) {
+    toast(plan.error, 'error');
+    return null;
+  }
+  const r = apply(plan.ops, { label: `Add ${media.name}` });
   if (!r.ok) return null;
-  select([clipId]);
-  return clipId;
+  if (plan.sequenceNotice) toast(plan.sequenceNotice);
+  select([plan.clipId]);
+  return plan.clipId;
 }
 
 /** Split selected clips at the playhead; if none are selected, split everything under it. */
@@ -170,63 +94,6 @@ export function duplicateSelection() {
   );
   if (r.ok) select(ids);
 }
-
-export interface TitlePreset {
-  id: string;
-  name: string;
-  text: string;
-  style: Partial<TextStyle>;
-  transform?: Partial<Transform>;
-}
-
-/** Original Viditor title presets. */
-export const TITLE_PRESETS: TitlePreset[] = [
-  { id: 'title', name: 'Title', text: 'Your title', style: { fontSize: 120, fontWeight: 700 } },
-  {
-    id: 'subtitle',
-    name: 'Subtitle',
-    text: 'A short subtitle',
-    style: { fontSize: 64, fontWeight: 400, color: '#e6e6e6' },
-  },
-  {
-    id: 'lower-third',
-    name: 'Lower third',
-    text: 'Name Surname\nRole or location',
-    style: {
-      fontSize: 48,
-      fontWeight: 700,
-      align: 'left',
-      background: '#111111cc',
-      lineHeight: 1.35,
-    },
-    transform: { x: -0.25, y: 0.3 },
-  },
-  {
-    id: 'poster',
-    name: 'Poster',
-    text: 'BIG NEWS',
-    style: {
-      fontFamily: 'Bebas Neue',
-      fontWeight: 400,
-      fontSize: 220,
-      strokeColor: '#000000',
-      strokeWidth: 6,
-    },
-  },
-  {
-    id: 'serif',
-    name: 'Elegant',
-    text: 'Chapter One',
-    style: { fontFamily: 'Playfair Display', fontWeight: 400, fontSize: 110 },
-  },
-  {
-    id: 'tag',
-    name: 'Tag',
-    text: '@yourhandle',
-    style: { fontFamily: 'Montserrat', fontSize: 44, fontWeight: 700, background: '#6d5efcdd' },
-    transform: { y: -0.36 },
-  },
-];
 
 export function addTitle(preset: TitlePreset = TITLE_PRESETS[0]!) {
   const { project, playhead } = get();

@@ -28,6 +28,7 @@ export interface MediaRuntime {
 
 export type SaveState = 'saved' | 'dirty' | 'saving' | 'error';
 export type DialogKind = null | 'export' | 'settings' | 'shortcuts';
+export type LeftTab = 'media' | 'text' | 'captions' | 'ai';
 
 export interface Toast {
   id: number;
@@ -57,6 +58,7 @@ export interface EditorState {
   redoLabel?: string;
 
   dialog: DialogKind;
+  leftTab: LeftTab;
   /** Autosave newer than project.json, offered on open. */
   recovery: RecoverySnapshot | null;
   toasts: Toast[];
@@ -78,6 +80,7 @@ export const useEditor = create<EditorState>(() => ({
   canUndo: false,
   canRedo: false,
   dialog: null,
+  leftTab: 'media',
   recovery: null,
   toasts: [],
 }));

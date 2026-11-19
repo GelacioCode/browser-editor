@@ -8,6 +8,7 @@ RUN corepack enable
 # Install dependencies first (cached unless manifests/lockfile change).
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY apps/web/package.json apps/web/
+COPY apps/mcp-bridge/package.json apps/mcp-bridge/
 COPY packages/project-core/package.json packages/project-core/
 COPY packages/composition/package.json packages/composition/
 COPY packages/media/package.json packages/media/

@@ -17,6 +17,7 @@ import {
   splitAtPlayhead,
 } from '../state/actions.ts';
 import { saveNow } from '../state/project-io.ts';
+import { resumeAssistantIfEnabled } from '../state/assistant.ts';
 
 function usePersistedNumber(key: string, initial: number): [number, (v: number) => void] {
   const [v, setV] = useState(() => {
@@ -124,6 +125,7 @@ export function Editor() {
   const [right, setRight] = usePersistedNumber('vd.rightWidth', 300);
   const [bottom, setBottom] = usePersistedNumber('vd.timelineHeight', 300);
   useShortcuts();
+  useEffect(() => resumeAssistantIfEnabled(), []);
   const close = () => openDialog(null);
 
   return (

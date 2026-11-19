@@ -19,7 +19,7 @@ validated engine handles every edit, and preview and export agree. A few mechani
 ## Data flow
 
 ```
-          UI (React)                                   future MCP bridge
+          UI (React)                                   MCP bridge (via the AI panel)
               │  Operation[]                                  │ Operation[] + opId + expectedRevision
               ▼                                               ▼
       ┌──────────────────────── ProjectEngine (packages/project-core) ───────────────────────┐
@@ -106,15 +106,22 @@ is transferred to the export worker. The output file stream is wrapped in a tran
 `WritableStream`, and the main thread waits for the file to commit before reporting success.
 Canceling an export, or a failed one, deletes the partial file.
 
-## MCP (next milestone)
+## MCP (milestone 2)
 
-A browser tab can't be launched as a stdio MCP server. The plan:
+A browser tab can't be launched as a stdio MCP server, so there are two halves:
 
-1. A small local CLI, `viditor-mcp`, is the stdio MCP server the assistant host launches.
-2. The editor tab connects to it over an authenticated `127.0.0.1` WebSocket using a pairing token.
-3. Tool calls become `Transaction`s against the same `ProjectEngine`, carrying `opId` and
-   `expectedRevision`.
-4. Responses use `toAssistantView()` from `packages/contracts`, which hides file names, paths and
-   text unless the user enables sharing.
+1. **`apps/mcp-bridge` (`viditor-mcp.mjs`)**: the stdio MCP server the assistant host launches. It
+   registers the tool catalogue and relays each call to the tab. It's bundled into one file with
+   no install step and served at `/downloads/viditor-mcp.mjs`.
+2. **The tab** connects when the user clicks Connect in the AI panel (`apps/web/src/state/assistant.ts`).
+   The link uses Server-Sent Events from the bridge to the tab, plus `POST /result` back, on
+   `127.0.0.1` only. It needs no WebSocket dependency. The bridge checks Origin and Host and issues
+   a per-connection token (see [assistant.md](assistant.md#security-model)).
+3. **Tools live in `packages/contracts`** and execute in the tab via `runTool()`. Each mutation is a
+   `Transaction` against the same `ProjectEngine` the UI uses, with `origin: 'assistant'`, an
+   `AI: …` undo label, optional `expectedRevision` / `projectId` / `opId` guards, and results in
+   seconds through privacy-filtered views.
+4. UI and tools share edit planning (`planAddMedia`, `TITLE_PRESETS`), so the same request behaves
+   the same from either side.
 
-A remote Streamable-HTTP relay on the VPS can come later (guide §9).
+A remote Streamable-HTTP relay on the VPS (for web-based assistants) can come later (guide §9).
