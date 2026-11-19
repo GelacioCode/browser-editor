@@ -10,6 +10,42 @@ test('app loads, passes diagnostics and shows the welcome screen', async ({ page
   expect(errors).toEqual([]);
 });
 
+test('a cancelled or declined folder picker explains what to do instead of doing nothing', async ({
+  page,
+}) => {
+  await page.addInitScript(() => {
+    (window as unknown as { showDirectoryPicker: () => Promise<never> }).showDirectoryPicker = () =>
+      Promise.reject(new DOMException('The user aborted a request.', 'AbortError'));
+  });
+  await page.goto('/');
+  await page.getByRole('button', { name: /create project/i }).click();
+  await expect(page.getByRole('status').filter({ hasText: 'No folder was opened' })).toBeVisible();
+  await expect(page.getByRole('status').filter({ hasText: 'Edit files' })).toBeVisible();
+});
+
+test('choosing a folder that already holds a project opens it', async ({ page }) => {
+  await page.addInitScript(() => {
+    (window as unknown as { showDirectoryPicker: () => Promise<unknown> }).showDirectoryPicker =
+      async () => {
+        const root = await navigator.storage.getDirectory();
+        return root.getDirectoryHandle('reopen-test', { create: true });
+      };
+  });
+  await page.goto('/');
+  await page.evaluate(async () => {
+    const root = await navigator.storage.getDirectory();
+    await root.removeEntry('reopen-test', { recursive: true }).catch(() => {});
+  });
+  await page.getByPlaceholder('Project name').fill('First');
+  await page.getByRole('button', { name: /create project/i }).click();
+  await expect(page.getByLabel('Project name')).toHaveValue('First');
+  await page.getByRole('button', { name: 'Close project' }).click();
+  // Same folder again via "create": it opens the existing project instead of failing.
+  await page.getByPlaceholder('Project name').fill('Second');
+  await page.getByRole('button', { name: /create project/i }).click();
+  await expect(page.getByLabel('Project name')).toHaveValue('First');
+});
+
 test('editor UI: timeline editing with keyboard, undo and autosave', async ({ page }) => {
   const errors: string[] = [];
   page.on('pageerror', (e) => errors.push(e.message));

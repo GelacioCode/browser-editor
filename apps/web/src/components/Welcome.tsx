@@ -1,6 +1,15 @@
 import { useEffect, useState } from 'react';
-import { FolderOpen, FolderPlus, Clock, ShieldCheck, Trash2 } from 'lucide-react';
 import {
+  FolderOpen,
+  FolderPlus,
+  Clock,
+  ShieldCheck,
+  Trash2,
+  Info,
+  AlertTriangle,
+} from 'lucide-react';
+import {
+  hasProjectFile,
   listRecentProjects,
   pickDirectory,
   removeRecentProject,
@@ -8,7 +17,7 @@ import {
 } from '@viditor/media';
 import { createProjectInFolder, openProjectFolder } from '../state/project-io.ts';
 import { toast } from '../state/store.ts';
-import { Button, IconButton } from '../ui/ui.tsx';
+import { Button, IconButton, cx } from '../ui/ui.tsx';
 import { Logo } from './Logo.tsx';
 import { CheckList } from './Diagnostics.tsx';
 import type { Check } from '../lib/capabilities.ts';
@@ -17,6 +26,7 @@ export function Welcome({ checks }: { checks: Check[] }) {
   const [recent, setRecent] = useState<RecentProject[]>([]);
   const [name, setName] = useState('');
   const [busy, setBusy] = useState(false);
+  const [notice, setNotice] = useState<{ kind: 'info' | 'error'; text: string } | null>(null);
   const warnings = checks.filter((c) => !c.ok);
 
   useEffect(() => {
@@ -25,13 +35,31 @@ export function Welcome({ checks }: { checks: Check[] }) {
 
   const run = async (fn: () => Promise<void>) => {
     setBusy(true);
+    setNotice(null);
     try {
       await fn();
     } catch (e) {
-      toast(e instanceof Error ? e.message : String(e), 'error', 7000);
+      const text = e instanceof Error ? e.message : String(e);
+      setNotice({ kind: 'error', text });
+      toast(text, 'error', 7000);
     } finally {
       setBusy(false);
     }
+  };
+
+  /** The picker resolves to nothing on cancel, on a declined "edit files" prompt, or a blocked folder. */
+  const pick = async () => {
+    const dir = await pickDirectory();
+    if (!dir) {
+      setNotice({
+        kind: 'info',
+        text:
+          'No folder was opened. If the browser asked "Let this site edit files?", choose Edit files. ' +
+          "If it said it can't open the folder because it contains system files, create a new folder " +
+          'inside it (for example Documents\\Viditor\\My video) and pick that one.',
+      });
+    }
+    return dir;
   };
 
   const open = (dir: FileSystemDirectoryHandle) =>
@@ -67,17 +95,24 @@ export function Welcome({ checks }: { checks: Check[] }) {
               disabled={busy}
               onClick={() =>
                 run(async () => {
-                  const dir = await pickDirectory();
-                  if (dir) await createProjectInFolder(dir, name);
+                  const dir = await pick();
+                  if (!dir) return;
+                  // Picking a folder that already holds a project just opens it.
+                  if (await hasProjectFile(dir)) {
+                    toast('That folder already had a Viditor project, so it was opened.');
+                    await openProjectFolder(dir);
+                  } else await createProjectInFolder(dir, name);
                 })
               }
             >
-              <FolderPlus size={15} /> Choose a folder & create project
+              <FolderPlus size={15} />{' '}
+              {busy ? 'Opening folder…' : 'Choose a folder & create project'}
             </Button>
             <p className="text-[11px] text-faint">
-              Pick an empty folder. Viditor saves <code>project.json</code>, autosave snapshots and
-              (optionally) exports there. Tip: keep your footage inside this folder so the project
-              reopens without extra permission prompts.
+              Choose or create a folder for this project, e.g.{' '}
+              <code>Documents\Viditor\My video</code>, then allow the browser to edit files there.
+              Viditor saves <code>project.json</code>, autosaves and exports in it. Tip: keep your
+              footage in the same folder so the project reopens without extra permission prompts.
             </p>
           </div>
 
@@ -87,14 +122,33 @@ export function Welcome({ checks }: { checks: Check[] }) {
               disabled={busy}
               onClick={() =>
                 run(async () => {
-                  const dir = await pickDirectory();
-                  if (dir) await open(dir);
+                  const dir = await pick();
+                  if (dir) await openProjectFolder(dir);
                 })
               }
             >
               <FolderOpen size={15} /> Open project folder
             </Button>
           </div>
+
+          {notice && (
+            <div
+              role={notice.kind === 'error' ? 'alert' : 'status'}
+              className={cx(
+                'mt-4 flex items-start gap-2 rounded-md border p-3 text-xs',
+                notice.kind === 'error'
+                  ? 'border-danger/40 bg-danger/10 text-[#ffc2c8]'
+                  : 'border-warning/40 bg-warning/10 text-warning',
+              )}
+            >
+              {notice.kind === 'error' ? (
+                <AlertTriangle size={14} className="mt-px shrink-0" />
+              ) : (
+                <Info size={14} className="mt-px shrink-0" />
+              )}
+              <span>{notice.text}</span>
+            </div>
+          )}
 
           <div className="mt-5 flex items-start gap-2 rounded-md bg-surface-2 p-3 text-xs text-muted">
             <ShieldCheck size={16} className="mt-px shrink-0 text-success" />
