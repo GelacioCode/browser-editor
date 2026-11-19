@@ -19,6 +19,8 @@ jobs:
       - uses: actions/setup-node@v5
         with:
           node-version: 24
+          # setup-node v5 would try to cache pnpm before corepack has installed it.
+          package-manager-cache: false
       - run: corepack enable
       - run: pnpm install --frozen-lockfile
       - run: pnpm lint
@@ -35,6 +37,8 @@ jobs:
       - uses: actions/setup-node@v5
         with:
           node-version: 24
+          # setup-node v5 would try to cache pnpm before corepack has installed it.
+          package-manager-cache: false
       - run: corepack enable
       - run: pnpm install --frozen-lockfile
       - run: pnpm test:integration
