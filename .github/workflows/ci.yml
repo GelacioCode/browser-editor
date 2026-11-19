@@ -7,7 +7,8 @@ on:
 
 concurrency:
   group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  # Never cancel runs on main: a cancelled run could interrupt a deploy.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   checks:
@@ -52,3 +53,51 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       - run: docker build -f deploy/Dockerfile -t viditor-web:ci .
+
+  deploy:
+    # Runs only for pushes to main, and only after every check above has passed.
+    name: Deploy to VPS
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: [checks, integration, docker]
+    runs-on: ubuntu-latest
+    environment: production
+    concurrency:
+      group: deploy-production
+      cancel-in-progress: false
+    steps:
+      - name: Deploy over SSH
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+          VPS_PORT: ${{ secrets.VPS_PORT }}
+          VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+          VPS_KNOWN_HOSTS: ${{ secrets.VPS_KNOWN_HOSTS }}
+        run: |
+          if [ -z "$VPS_HOST" ] || [ -z "$VPS_SSH_KEY" ] || [ -z "$VPS_KNOWN_HOSTS" ]; then
+            echo "::warning::Deploy secrets are not configured yet; skipping (see docs/deployment.md)."
+            exit 0
+          fi
+          install -m 700 -d ~/.ssh
+          echo "$VPS_SSH_KEY" > ~/.ssh/deploy_key && chmod 600 ~/.ssh/deploy_key
+          # Pinned host key: refuse to connect if the server's identity ever changes.
+          echo "$VPS_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          # The key is restricted on the server to running deploy/deploy.sh, whatever we send.
+          ssh -i ~/.ssh/deploy_key -p "${VPS_PORT:-22}" \
+            -o StrictHostKeyChecking=yes -o BatchMode=yes -o ConnectTimeout=20 \
+            "${VPS_USER:-root}@$VPS_HOST" deploy
+
+      - name: Check the live site
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+        run: |
+          [ -z "$VPS_HOST" ] && exit 0
+          for i in 1 2 3 4 5 6; do
+            if curl -fsS -o /dev/null https://viditor.samuelgelacio.io/ \
+              && curl -fsSI https://viditor.samuelgelacio.io/downloads/viditor-mcp.mjs | grep -qi '^HTTP/.* 200'; then
+              echo "Site is up."
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "::error::https://viditor.samuelgelacio.io is not responding after deploy"
+          exit 1

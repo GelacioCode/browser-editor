@@ -17,11 +17,11 @@ viditor.samuelgelacio.io  →  <VPS public IP>
 
 ```bash
 ssh <you>@<vps>
-git clone https://github.com/GelacioCode/browser-editor.git ~/apps/viditor
-cd ~/apps/viditor
+git clone https://github.com/GelacioCode/browser-editor.git /opt/browser-editor
+cd /opt/browser-editor
 cp deploy/.env.example deploy/.env
 nano deploy/.env        # see below
-docker compose -f deploy/docker-compose.yml --env-file deploy/.env up -d --build
+docker compose -p viditor -f deploy/docker-compose.yml --env-file deploy/.env up -d --build
 ```
 
 ### `deploy/.env`
@@ -72,12 +72,65 @@ encoder checks.
 
 ## Updating
 
+Automatic (after the setup below): every push to `main` that passes all CI checks is deployed.
+
+By hand, at any time:
+
 ```bash
-cd ~/apps/viditor
-git pull
-docker compose -f deploy/docker-compose.yml --env-file deploy/.env up -d --build
-docker image prune -f      # remove old image layers
+/opt/browser-editor/deploy/deploy.sh
 ```
+
+The script fast-forwards the checkout to `origin/main`, rebuilds and restarts the container, waits
+for its health check, and prunes old images. It refuses to run if tracked files were edited on the
+server.
+
+## Automatic deploys (GitHub Actions)
+
+The `Deploy to VPS` job in `.github/workflows/ci.yml` runs on pushes to `main` after lint,
+typecheck, unit tests, browser tests and the Docker build have **all** passed. It SSHes in with a
+dedicated key that the server only allows to run `deploy/deploy.sh` (an SSH forced command): no
+shell, no port forwarding. The server's host key is pinned. Until the secrets below exist, the job
+skips with a warning.
+
+### One-time setup
+
+**1. On the VPS**, create the deploy key and restrict it to the deploy script:
+
+```bash
+chmod +x /opt/browser-editor/deploy/deploy.sh
+ssh-keygen -t ed25519 -N "" -C "viditor-github-deploy" -f /root/.ssh/viditor_deploy
+echo "restrict,command=\"/opt/browser-editor/deploy/deploy.sh\" $(cat /root/.ssh/viditor_deploy.pub)" >> /root/.ssh/authorized_keys
+```
+
+Print the two values GitHub needs:
+
+```bash
+cat /root/.ssh/viditor_deploy                                   # → VPS_SSH_KEY (private key)
+echo "187.127.114.35 $(cut -d' ' -f1,2 /etc/ssh/ssh_host_ed25519_key.pub)"   # → VPS_KNOWN_HOSTS
+```
+
+**2. On GitHub** → repository → Settings → Secrets and variables → Actions → New repository
+secret:
+
+| Secret            | Value                                                    |
+| ----------------- | -------------------------------------------------------- |
+| `VPS_HOST`        | `187.127.114.35`                                         |
+| `VPS_USER`        | `root`                                                   |
+| `VPS_SSH_KEY`     | The whole private key, including the `BEGIN`/`END` lines |
+| `VPS_KNOWN_HOSTS` | The `187.127.114.35 ssh-ed25519 AAAA…` line              |
+| `VPS_PORT`        | Optional, only if SSH isn't on port 22                   |
+
+Then delete the private key from the server (`rm /root/.ssh/viditor_deploy`). GitHub keeps
+the only copy, and the public half stays in `authorized_keys`.
+
+**3. Test it:** GitHub → Actions → the latest CI run → Re-run all jobs (or push any commit). The
+`Deploy to VPS` job should end with `Deployed <commit>. Container healthy.`
+
+To revoke: delete the line containing `viditor-github-deploy` from `/root/.ssh/authorized_keys`.
+
+If the repository is private, the VPS checkout needs read access to pull. Use a read-only
+[deploy key](https://docs.github.com/en/authentication/connecting-to-github-with-ssh/managing-deploy-keys)
+for the clone. Never put a personal token in the remote URL.
 
 ## Notes
 
@@ -85,4 +138,4 @@ docker image prune -f      # remove old image layers
 - The container runs read-only with all capabilities dropped except binding port 80, a 128 MB
   memory limit and rotated logs.
 - There are no media endpoints, by design (guide §13). The VPS never receives footage.
-- Rollback: `git checkout <previous-commit>` and re-run the compose command.
+- Rollback: `git revert` the bad commit and push (CI redeploys), or on the server `git checkout <previous-commit>` and re-run the compose command.
